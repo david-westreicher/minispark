@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import operator
 from typing import Any, Iterable, Callable, Self
 
-from src.io import ColumnType
+from .io import ColumnType
 
 
 class Col:

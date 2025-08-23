@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Self
-from .io import Schema
 from .sql import Col, Lit
+from .io import Schema
 from .tasks import (
     Task,
     VoidTask,

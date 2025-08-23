@@ -1,0 +1,11 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mini_spark"
+version = "0.1.0"
+authors = [{ name = "David Westreicher" }]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
