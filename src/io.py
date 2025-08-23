@@ -21,6 +21,15 @@ class ColumnType(Enum):
             if type.ordinal == ordinal:
                 return type
 
+    @staticmethod
+    def of(value: Any):
+        if type(value) is int:
+            return ColumnType.INTEGER
+        elif type(value) is str:
+            return ColumnType.STRING
+        else:
+            return ColumnType.UNKNOWN
+
 
 Schema = list[tuple[str, ColumnType]]
 
@@ -93,7 +102,7 @@ def generate_data_blocks(header, data) -> Iterable[bytes]:
         yield binarize_block(column_data, rows)
 
 
-def serialize(schema, data, output_file: Path):
+def serialize(schema: Schema, data: list[tuple[Any, ...]], output_file: Path):
     with output_file.open(mode="wb") as f:
         serialize_schema(schema, f)
         block_sizes = []
@@ -102,8 +111,15 @@ def serialize(schema, data, output_file: Path):
             f.write(data_block)
         for block_size in block_sizes:
             f.write(binarize_value(block_size))
-        print("Block sizes:", len(block_sizes))
+        print("Serialize: block sizes:", len(block_sizes))
         f.write(to_unsigned_int(len(block_sizes)))
+
+
+def serialize_rows(data: list[dict[str, Any]], output_file: Path):
+    first_row = data[0]
+    schema = [(col_name, ColumnType.of(value)) for col_name, value in first_row.items()]
+    data_tuples = [tuple(row[col_name] for col_name, _ in schema) for row in data]
+    serialize(schema, data_tuples, output_file)
 
 
 def deserialize_schema(f: BufferedReader) -> Schema:
@@ -151,7 +167,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rows", type=int, default=100)
+    parser.add_argument("--rows", type=int, default=10)
     args = parser.parse_args()
 
     schema = [
@@ -159,6 +175,6 @@ if __name__ == "__main__":
         ("col_b", ColumnType.INTEGER),
         ("col_c", ColumnType.STRING),
     ]
-    data = [(i, i, f"text{i}") for i in range(args.rows)]
+    data = [(i, i, f"text{i % 2}") for i in range(args.rows)]
     validate(schema, data)
     serialize(schema, data, Path("data.bin"))
