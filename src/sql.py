@@ -36,6 +36,9 @@ class Col:
     def __truediv__(self, other: Any):
         return BinaryOperatorColumn(self, other, operator.truediv)
 
+    def __eq__(self, other: Any):
+        return BinaryOperatorColumn(self, other, operator.eq)
+
     def execute(self, row: dict[str, Any]) -> Any:
         return row[self.name]
 

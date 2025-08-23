@@ -41,6 +41,14 @@ def binarize_value(value) -> bytes:
     raise ValueError(f"Unsupported type {type(value)}:{value}")
 
 
+def to_unsigned_int(value: int) -> bytes:
+    return value.to_bytes(4, byteorder="big", signed=False)
+
+
+def read_unsigned_int(f: BufferedReader) -> int:
+    return int.from_bytes(f.read(4), byteorder="big", signed=False)
+
+
 def serialize_schema(schema: Schema, f: BufferedWriter):
     # | schema-len |
     # ---- repeat 'schema-len' times ----
@@ -58,9 +66,9 @@ def serialize_schema(schema: Schema, f: BufferedWriter):
 
 
 def generate_data_blocks(header, data) -> Iterable[bytes]:
-    def binarize_block(column_data: list[bytearray], rows) -> bytes:
-        assert rows < 255
-        block_data = [rows & 0xFF]
+    def binarize_block(column_data: list[bytearray], row_count: int) -> bytes:
+        block_data: list[int] = []
+        block_data.extend(to_unsigned_int(row_count))
         for column in column_data:
             block_data.extend(column)
         return bytes(block_data)
@@ -70,12 +78,10 @@ def generate_data_blocks(header, data) -> Iterable[bytes]:
     current_block_size = 0
     rows = 0
     while i < len(data):
-        if (
-            current_block_size > constants.BLOCK_SIZE
-            or rows >= constants.MAX_ROWS_PER_BLOCK
-        ):
+        if current_block_size > constants.BLOCK_SIZE:
             yield binarize_block(column_data, rows)
             column_data = [bytearray() for _ in header]
+            current_block_size = 0
             rows = 0
         for j, value in enumerate(data[i]):
             binary_value = binarize_value(value)
@@ -97,7 +103,7 @@ def serialize(schema, data, output_file: Path):
         for block_size in block_sizes:
             f.write(binarize_value(block_size))
         print("Block sizes:", len(block_sizes))
-        f.write(binarize_value(len(block_sizes)))
+        f.write(to_unsigned_int(len(block_sizes)))
 
 
 def deserialize_schema(f: BufferedReader) -> Schema:
@@ -111,9 +117,9 @@ def deserialize_schema(f: BufferedReader) -> Schema:
     return schema
 
 
-def deserialize_block_starts(f: BufferedReader):
+def deserialize_block_starts(f: BufferedReader) -> list[int]:
     f.seek(-4, os.SEEK_END)
-    block_counts = int.from_bytes(f.read(4), byteorder="big", signed=True)
+    block_counts = read_unsigned_int(f)
     block_sizes = []
     f.seek(-4 * block_counts - 4, os.SEEK_CUR)
     for _ in range(block_counts):
@@ -122,7 +128,7 @@ def deserialize_block_starts(f: BufferedReader):
 
 
 def deserialize_block(f: BufferedReader, header) -> list[list[Any]]:
-    block_rows = int(f.read(1)[0])
+    block_rows = read_unsigned_int(f)
     data: list[list[Any]] = [[] for _ in header]
     for i, (col_name, col_type) in enumerate(header):
         col_data: list[Any] = []
@@ -142,11 +148,17 @@ def deserialize_block(f: BufferedReader, header) -> list[list[Any]]:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rows", type=int, default=100)
+    args = parser.parse_args()
+
     schema = [
         ("col_a", ColumnType.INTEGER),
         ("col_b", ColumnType.INTEGER),
         ("col_c", ColumnType.STRING),
     ]
-    data = [(i, i, f"text{i}") for i in range(100)]
+    data = [(i, i, f"text{i}") for i in range(args.rows)]
     validate(schema, data)
     serialize(schema, data, Path("data.bin"))
