@@ -11,7 +11,7 @@ from .io import (
     deserialize_schema,
     deserialize_block,
     Schema,
-    serialize_rows,
+    append_rows,
 )
 from .sql import Col, BinaryOperatorColumn
 from .constants import Row
@@ -23,6 +23,7 @@ class Job:
     block_id: int
     worker_count: int = -1
     worker_id: int = -1
+    current_stage: int = -1
     shuffle_file: Path | None = None
 
     def execute(self) -> Iterable[Row]:
@@ -42,8 +43,10 @@ class Task(ABC):
     def validate_schema(self) -> Schema:
         return self.parent_task.validate_schema()
 
-    def create_jobs(self, full_task: "Task", worker_count: int) -> Iterable[Job]:
-        yield from self.parent_task.create_jobs(full_task, worker_count)
+    def create_jobs(
+        self, full_task: "Task", worker_count: int, stage_count: int
+    ) -> Iterable[Job]:
+        yield from self.parent_task.create_jobs(full_task, worker_count, stage_count)
 
 
 @dataclass
@@ -103,8 +106,10 @@ class LoadTableTask(Task):
         assert schema == []
         return self.schema
 
-    def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
-        yield from self.parent_task.create_jobs(full_task, worker_count)
+    def create_jobs(
+        self, full_task: Task, worker_count: int, stage_count: int
+    ) -> Iterable[Job]:
+        yield from self.parent_task.create_jobs(full_task, worker_count, stage_count)
         for block_id in range(len(self.block_starts)):
             yield Job(full_task, block_id)
 
@@ -125,16 +130,19 @@ class LoadShuffleFileTask(Task):
             block_data = deserialize_block(f, schema)
             for row in zip(*block_data):
                 yield {name: val for val, (name, _) in zip(row, schema)}
-        job.shuffle_file.unlink(missing_ok=True)
 
     def load_schema(self, shuffle_file: Path) -> Schema:
         with shuffle_file.open(mode="rb") as f:
             return list(deserialize_schema(f))
 
-    def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
+    def create_jobs(
+        self, full_task: Task, worker_count: int, stage_count: int
+    ) -> Iterable[Job]:
         for worker_from in range(worker_count):
             for worker_to in range(worker_count):
-                shuffle_file = Path(f"shuffle/{worker_from}_{worker_to}.bin")
+                shuffle_file = Path(
+                    f"shuffle/{stage_count - 1}_{worker_from}_{worker_to}.bin"
+                )
                 if not shuffle_file.exists():
                     continue
                 for block_id in range(len(self.block_starts(shuffle_file))):
@@ -253,10 +261,11 @@ class ShuffleToFileTask(Task):
             destination_shuffle = hash(row["key"]) % job.worker_count
             shuffle_buckets[destination_shuffle].extend(row["rows"])
         for shuffle_bucket, rows in shuffle_buckets.items():
-            shuffle_file = Path(f"shuffle/{job.worker_id}_{shuffle_bucket}.bin")
+            shuffle_file = Path(
+                f"shuffle/{job.current_stage}_{job.worker_id}_{shuffle_bucket}.bin"
+            )
             print("writing", shuffle_file)
-            # TODO SHOULD BE APPEND NOT OVERWRITE
-            serialize_rows(rows, shuffle_file)
+            append_rows(rows, shuffle_file)
         return []
 
     def explain(self, lvl: int = 0):
@@ -278,5 +287,7 @@ class VoidTask(Task):
     def validate_schema(self) -> Schema:
         return []
 
-    def create_jobs(self, full_task: "Task", worker_count: int) -> Iterable[Job]:
+    def create_jobs(
+        self, full_task: "Task", worker_count: int, stage_count: int
+    ) -> Iterable[Job]:
         return []

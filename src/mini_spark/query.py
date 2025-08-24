@@ -1,5 +1,6 @@
 from typing import Iterable
 from copy import deepcopy
+from pathlib import Path
 from multiprocessing import Pool, Queue
 from collections import defaultdict
 from .io import Schema
@@ -32,18 +33,27 @@ class Executor:
         with Pool(processes=self.worker_count, initializer=init_worker) as worker_pool:
             Analyzer(self.task).analyze()
             stages = list(reversed(list(self.split_into_stages(self.task))))
+            shuffle_files_to_delete: set[Path] = set()
             for i, stage in enumerate(stages):
                 print("#" * 100)
                 print("Stage", i)
                 stage.explain()
-                jobs = list(stage.create_jobs(stage, self.worker_count))
+                jobs = list(stage.create_jobs(stage, self.worker_count, i))
+                print("Jobs:", len(jobs))
+                for job in jobs:
+                    job.current_stage = i
+                    if job.shuffle_file is not None:
+                        shuffle_files_to_delete.add(job.shuffle_file)
                 grouped_jobs = self.group_jobs_by_worker(jobs)
+                print("Physical plan created")
                 if USE_WORKERS:
                     for job_result in worker_pool.imap_unordered(self.ex, grouped_jobs):
                         yield from job_result
                 else:
                     for job_result in map(self.ex, grouped_jobs):
                         yield from job_result
+            for shuffle_file in shuffle_files_to_delete:
+                shuffle_file.unlink(missing_ok=True)
 
     def group_jobs_by_worker(self, jobs: list[Job]) -> list[list[Job]]:
         assert all(job.task == jobs[0].task for job in jobs)
@@ -73,7 +83,9 @@ class Executor:
                     job.worker_id = 0
                 job.worker_count = 2
             assert job.worker_id <= self.worker_count
+            print("Job started", job.task.__class__.__name__, job.worker_id)
             final_result = list(job.execute())
+            print("Job finished", job.task.__class__.__name__, job.worker_id)
         return final_result
 
     def split_into_stages(self, root_task: Task) -> Iterable[Task]:
