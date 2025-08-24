@@ -204,7 +204,7 @@ class GroupByTask(Task):
         for row in self.parent_task.execute(job):
             result[self.column.execute(row)].append(row)
         for key, rows in result.items():
-            yield Row(key=key, key_col_name=self.column.name, rows=rows)
+            yield Row(key=key, rows=rows)
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -217,7 +217,7 @@ class GroupByTask(Task):
         ]
         if unknown_cols:
             raise Exception(f"Unknown columns in GroupBy: {unknown_cols}")
-        return schema
+        return [(self.column.name, ColumnType.UNKNOWN)]
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
@@ -232,8 +232,7 @@ class CountTask(Task):
 
     def execute(self, job: Job) -> Iterable[Row]:
         for row in self.parent_task.execute(job):
-            self.counter[row[self.group_by_column.name]] += 1
-        # print(self.counter, job)
+            self.counter[self.group_by_column.execute(row)] += 1
         return [
             {self.group_by_column.name: key, "count": count}
             for key, count in self.counter.items()

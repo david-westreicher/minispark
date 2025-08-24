@@ -83,9 +83,9 @@ class Executor:
                     job.worker_id = 0
                 job.worker_count = 2
             assert job.worker_id <= self.worker_count
-            print("Job started", job.task.__class__.__name__, job.worker_id)
+            # print("Job started", job.task.__class__.__name__, job.worker_id)
             final_result = list(job.execute())
-            print("Job finished", job.task.__class__.__name__, job.worker_id)
+            # print("Job finished", job.task.__class__.__name__, job.worker_id)
         return final_result
 
     def split_into_stages(self, root_task: Task) -> Iterable[Task]:

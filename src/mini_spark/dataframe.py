@@ -88,6 +88,5 @@ if __name__ == "__main__":
         # .filter(Col("final_a") == -1)
         .group_by(Col("final_d"))
         .count()
-        .select(Col("final_d"), Col("count"), Lit(1).alias("some_num"))
     )
     df.show(n=-1)
