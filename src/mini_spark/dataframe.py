@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Self
-from .sql import Col, Lit
+from .sql import Col
 from .io import Schema
 from .tasks import (
     Task,
@@ -11,6 +11,8 @@ from .tasks import (
     GroupByTask,
     ShuffleToFileTask,
     LoadShuffleFileTask,
+    JoinType,
+    JoinTask,
     CountTask,
 )
 from .query import Executor, Analyzer
@@ -54,7 +56,7 @@ class DataFrame:
 
     @property
     def schema(self) -> Schema:
-        return Analyzer(self.task).analyze()
+        return Analyzer.analyze(self.task)
 
     def select(self, *columns: Col) -> Self:
         if columns == ():
@@ -69,24 +71,8 @@ class DataFrame:
     def group_by(self, column: Col) -> GroupedData:
         return GroupedData(self, column)
 
-
-if __name__ == "__main__":
-    df = DataFrame().table("data.bin")
-    df.show()
-    df = (
-        df.select(
-            (Col("col_a") * -1).alias("col_a_minus"),
-            (Col("col_b") * 1).alias("col_b_plus"),
-            Col("col_c").alias("col_d"),
-        )
-        .filter(Col("col_a_minus") <= Col("col_b_plus"))
-        .select(
-            Col("col_a_minus").alias("final_a"),
-            Col("col_b_plus").alias("final_b"),
-            Col("col_d").alias("final_d"),
-        )
-        # .filter(Col("final_a") == -1)
-        .group_by(Col("final_d"))
-        .count()
-    )
-    df.show(n=-1)
+    def join(self, other_df: Self, on: Col, how: JoinType):
+        self.task = ShuffleToFileTask(self.task)
+        other_df.task = ShuffleToFileTask(other_df.task)
+        self.task = JoinTask(self.task, other_df.task, on, how)
+        return self

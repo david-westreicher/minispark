@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from abc import ABC, abstractmethod
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 from collections import Counter
 from collections import defaultdict
 from .io import (
@@ -15,6 +15,9 @@ from .io import (
 )
 from .sql import Col, BinaryOperatorColumn
 from .constants import Row
+from .algorithms import external_sort, external_merge_join
+
+JoinType = Literal["inner", "left", "right", "outer"]
 
 
 @dataclass
@@ -121,6 +124,8 @@ class LoadTableTask(Task):
 
 @dataclass
 class LoadShuffleFileTask(Task):
+    stage_to_load: int = -1
+
     def execute(self, job: Job) -> Iterable[Row]:
         assert job.shuffle_file is not None
         block_start = self.block_starts(job.shuffle_file)[job.block_id]
@@ -138,10 +143,11 @@ class LoadShuffleFileTask(Task):
     def create_jobs(
         self, full_task: Task, worker_count: int, stage_count: int
     ) -> Iterable[Job]:
+        assert self.stage_to_load != -1
         for worker_from in range(worker_count):
             for worker_to in range(worker_count):
                 shuffle_file = Path(
-                    f"shuffle/{stage_count - 1}_{worker_from}_{worker_to}.bin"
+                    f"shuffle/{self.stage_to_load}_{worker_from}_{worker_to}.bin"
                 )
                 if not shuffle_file.exists():
                     continue
@@ -160,7 +166,7 @@ class LoadShuffleFileTask(Task):
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} LoadShuffleFile()")
+        print(f"{indent} LoadShuffleFile(stage_to_load={self.stage_to_load})")
         self.parent_task.explain(lvl + 1)
 
 
@@ -223,6 +229,69 @@ class GroupByTask(Task):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(f"{indent} GroupBy({self.column})")
         self.parent_task.explain(lvl + 1)
+
+
+@dataclass
+class JoinTask(Task):
+    right_side_task: Task
+    join_condition: Col
+    how: JoinType = "inner"
+    left_shuffle_stage: int = -1
+    right_shuffle_stage: int = -1
+    left_key: Col | None = None
+    right_key: Col | None = None
+
+    def execute(self, job: Job) -> Iterable[Row]:
+        assert self.left_key
+        assert self.right_key
+        left_shuffle_files = list(
+            self.collect_shuffle_files(
+                self.left_shuffle_stage, job.worker_id, job.worker_count
+            )
+        )
+        left_sorted_file = external_sort(left_shuffle_files, self.left_key)
+        right_shuffle_files = list(
+            self.collect_shuffle_files(
+                self.right_shuffle_stage, job.worker_id, job.worker_count
+            )
+        )
+        right_sorted_file = external_sort(right_shuffle_files, self.right_key)
+        yield from external_merge_join(
+            left_sorted_file, right_sorted_file, self.join_condition, self.how
+        )
+
+    def collect_shuffle_files(
+        self, stage: int, worker_id: int, worker_count: int
+    ) -> Iterable[Path]:
+        for worker_from in range(worker_count):
+            shuffle_file = Path(f"shuffle/{stage}_{worker_from}_{worker_id}.bin")
+            if not shuffle_file.exists():
+                continue
+            yield shuffle_file
+
+    def validate_schema(self) -> Schema:
+        left_schema = self.parent_task.validate_schema()
+        right_schema = self.right_side_task.validate_schema()
+        referenced_column_names = [
+            col.name
+            for col in self.join_condition.all_nested_columns
+            if type(col) is Col
+        ]
+        schema_cols = {col_name for col_name, _ in left_schema + right_schema}
+        unknown_cols = [
+            col for col in referenced_column_names if col not in schema_cols
+        ]
+        if unknown_cols:
+            raise Exception(f"Unknown columns in Join: {unknown_cols}")
+        return left_schema + right_schema
+
+    def explain(self, lvl: int = 0):
+        indent = "  " * lvl + ("+- " if lvl > 0 else "")
+        print(
+            f'{indent} Join({self.join_condition}, "{self.how}", left_shuffle: {self.left_shuffle_stage}, right_shuffle: {self.right_shuffle_stage})'
+        )
+        self.parent_task.explain(lvl + 1)
+        self.right_side_task.explain(lvl + 1)
 
 
 @dataclass

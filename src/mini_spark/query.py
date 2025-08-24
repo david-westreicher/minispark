@@ -6,7 +6,9 @@ from collections import defaultdict
 from .io import Schema
 from .tasks import (
     Job,
+    LoadShuffleFileTask,
     Task,
+    JoinTask,
     VoidTask,
     ShuffleToFileTask,
 )
@@ -30,27 +32,33 @@ class Executor:
     def execute(self) -> Iterable[Row]:
         for worker_id in range(self.worker_count):
             id_queue.put(worker_id)
+        Analyzer.analyze(self.task)
+        stages = list(reversed(list(self.split_into_stages(self.task))))
+        for stage_num, stage in enumerate(stages):
+            Analyzer.optimize(stage, stage_num)
+        shuffle_files_to_delete: set[Path] = set()
         with Pool(processes=self.worker_count, initializer=init_worker) as worker_pool:
-            Analyzer(self.task).analyze()
-            stages = list(reversed(list(self.split_into_stages(self.task))))
-            shuffle_files_to_delete: set[Path] = set()
             for i, stage in enumerate(stages):
                 print("#" * 100)
                 print("Stage", i)
                 stage.explain()
                 jobs = list(stage.create_jobs(stage, self.worker_count, i))
-                print("Jobs:", len(jobs))
                 for job in jobs:
                     job.current_stage = i
                     if job.shuffle_file is not None:
                         shuffle_files_to_delete.add(job.shuffle_file)
                 grouped_jobs = self.group_jobs_by_worker(jobs)
+                print("Jobs:", len(jobs), "job groups: ", len(grouped_jobs))
                 print("Physical plan created")
                 if USE_WORKERS:
-                    for job_result in worker_pool.imap_unordered(self.ex, grouped_jobs):
+                    for job_result in worker_pool.imap_unordered(
+                        self.execute_job_group_on_worker, grouped_jobs
+                    ):
                         yield from job_result
                 else:
-                    for job_result in map(self.ex, grouped_jobs):
+                    for job_result in map(
+                        self.execute_job_group_on_worker, grouped_jobs
+                    ):
                         yield from job_result
             for shuffle_file in shuffle_files_to_delete:
                 shuffle_file.unlink(missing_ok=True)
@@ -71,7 +79,7 @@ class Executor:
             [job] for job in single_worker_jobs
         ]
 
-    def ex(self, jobs: list[Job]) -> list[Row]:
+    def execute_job_group_on_worker(self, jobs: list[Job]) -> list[Row]:
         final_result = []
         for job in jobs:
             if USE_WORKERS:
@@ -91,6 +99,16 @@ class Executor:
     def split_into_stages(self, root_task: Task) -> Iterable[Task]:
         curr_task = root_task
         while curr_task.parent_task is not None:
+            if type(curr_task) is JoinTask:
+                old_left, curr_task.parent_task = curr_task.parent_task, VoidTask()
+                old_right, curr_task.right_side_task = (
+                    curr_task.right_side_task,
+                    VoidTask(),
+                )
+                yield root_task
+                yield from self.split_into_stages(old_right)
+                yield from self.split_into_stages(old_left)
+                return
             if type(curr_task.parent_task) in {ShuffleToFileTask}:
                 tmp, curr_task.parent_task = curr_task.parent_task, VoidTask()
                 yield deepcopy(root_task)
@@ -102,8 +120,17 @@ class Executor:
 
 
 class Analyzer:
-    def __init__(self, task: Task):
-        self.task = task
+    @staticmethod
+    def analyze(task: Task) -> Schema:
+        return task.validate_schema()
 
-    def analyze(self) -> Schema:
-        return self.task.validate_schema()
+    @staticmethod
+    def optimize(task: Task, stage_num: int) -> None:
+        if type(task) is LoadShuffleFileTask:
+            task.stage_to_load = stage_num - 1
+        if type(task) is JoinTask:
+            task.left_shuffle_stage = stage_num - 2
+            task.right_shuffle_stage = stage_num - 1
+        if type(task) is VoidTask:
+            return
+        Analyzer.optimize(task.parent_task, stage_num)

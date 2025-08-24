@@ -1,4 +1,4 @@
 __pycache__
-data.bin
+*.bin
 shuffle
 myproject.egg-info
