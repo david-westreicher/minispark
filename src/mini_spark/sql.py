@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import operator
 from typing import Any, Iterable, Callable, Self
 
-from .io import ColumnType
+from .constants import Schema, ColumnType
 
 
 class Col:
@@ -49,9 +49,13 @@ class Col:
     def all_nested_columns(self) -> Iterable["Col"]:
         yield self
 
-    @property
-    def type(self) -> ColumnType:
-        return ColumnType.UNKNOWN
+    def infer_type(self, schema: Schema) -> ColumnType:
+        col_type = next(
+            (type for col_name, type in schema if col_name == self.name), None
+        )
+        if col_type is None:
+            raise ValueError(f"Column {self.name} not found in schema {schema}")
+        return col_type
 
     def __str__(self) -> str:
         return self.name
@@ -72,6 +76,9 @@ class AliasColumn(Col):
 
     def __str__(self) -> str:
         return f"({self.original_col}) AS {self.name}"
+
+    def infer_type(self, schema: Schema) -> ColumnType:
+        return self.original_col.infer_type(schema)
 
 
 OP_SYMBOLS = {
@@ -118,6 +125,15 @@ class BinaryOperatorColumn(Col):
     def __str__(self) -> str:
         return f"{self.left_side} {OP_SYMBOLS[self.operator]} {self.right_side}"
 
+    def infer_type(self, schema: Schema) -> ColumnType:
+        left_type = self.left_side.infer_type(schema)
+        right_type = self.right_side.infer_type(schema)
+        if left_type != right_type:
+            raise TypeError(
+                f"Type mismatch in binary operation: {left_type} {self.operator} {right_type}"
+            )
+        return left_type
+
 
 @dataclass
 class Lit(Col):
@@ -135,3 +151,6 @@ class Lit(Col):
 
     def __str__(self) -> str:
         return str(self.value)
+
+    def infer_type(self, schema: Schema) -> ColumnType:
+        return ColumnType.of(self.value)

@@ -76,6 +76,20 @@ def test_select_alias(test_data: str):
     ]
 
 
+def test_select_star(test_data: str):
+    # act
+    rows = DataFrame().table(test_data).select(Col("*")).collect()
+
+    # assert
+    assert rows == [
+        {"fruit": "apple", "quantity": 3, "color": "red"},
+        {"fruit": "banana", "quantity": 5, "color": "yellow"},
+        {"fruit": "orange", "quantity": 2, "color": "orange"},
+        {"fruit": "apple", "quantity": 4, "color": "green"},
+        {"fruit": "banana", "quantity": 7, "color": "yellow"},
+    ]
+
+
 def test_groupby(test_data: str):
     # act
     rows = DataFrame().table(test_data).group_by(Col("fruit")).count().collect()
@@ -110,7 +124,6 @@ def test_join(test_data: str):
     )
 
     # assert
-    print(rows)
     expected_rows = [
         {
             "fruit_left": "apple",

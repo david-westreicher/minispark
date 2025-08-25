@@ -3,7 +3,6 @@ from copy import deepcopy
 from pathlib import Path
 from multiprocessing import Pool, Queue
 from collections import defaultdict
-from .io import Schema
 from .tasks import (
     Job,
     LoadShuffleFileTask,
@@ -120,8 +119,13 @@ class Executor:
 
 class Analyzer:
     @staticmethod
-    def analyze(task: Task) -> Schema:
-        return task.validate_schema()
+    def analyze(task: Task):
+        if type(task) is VoidTask:
+            return
+        task.inferred_schema = task.validate_schema()
+        if type(task) is JoinTask:
+            Analyzer.analyze(task.right_side_task)
+        Analyzer.analyze(task.parent_task)
 
     @staticmethod
     def optimize(task: Task, stage_num: int) -> None:

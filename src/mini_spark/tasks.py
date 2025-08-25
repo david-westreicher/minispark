@@ -3,20 +3,16 @@ from functools import cached_property
 from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import Any, Iterable, Literal
-from collections import Counter
-from collections import defaultdict
+from collections import Counter, defaultdict
 from .io import (
-    ColumnType,
     deserialize_block_starts,
-    deserialize_schema,
     deserialize_block,
-    Schema,
     append_rows,
     BlockFile,
 )
-from .utils import create_temp_file
+from .utils import create_temp_file, nice_schema
 from .sql import Col, BinaryOperatorColumn
-from .constants import Row, SHUFFLE_FOLDER
+from .constants import Row, SHUFFLE_FOLDER, Schema, ColumnType
 from .algorithms import SORT_BLOCK_SIZE, external_sort, external_merge_join
 
 JoinType = Literal["inner", "left", "right", "outer"]
@@ -38,6 +34,7 @@ class Job:
 @dataclass
 class Task(ABC):
     parent_task: "Task"
+    inferred_schema: Schema | None = None
 
     @abstractmethod
     def execute(self, job: Job) -> Iterable[Row]: ...
@@ -52,7 +49,7 @@ class Task(ABC):
         yield from self.parent_task.create_jobs(full_task, worker_count)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ProjectTask(Task):
     columns: list[Col]
 
@@ -62,6 +59,17 @@ class ProjectTask(Task):
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
+        # expand * to all columns from previous schema
+        self.columns = [
+            sub
+            for col in self.columns
+            for sub in (
+                [Col(name) for name, _ in schema]
+                if type(col) is Col and col.name == "*"
+                else [col]
+            )
+        ]
+
         referenced_column_names = {
             col.name
             for column in self.columns
@@ -74,15 +82,17 @@ class ProjectTask(Task):
         ]
         if unknown_cols:
             raise Exception(f"Unknown columns in projection: {unknown_cols}")
-        return [(col.name, col.type) for col in self.columns]
+        return [(col.name, col.infer_type(schema)) for col in self.columns]
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} Project({', '.join(str(col) for col in self.columns)})")
+        print(
+            f"{indent} Project({', '.join(str(col) for col in self.columns)}):{nice_schema(self.inferred_schema)}"
+        )
         self.parent_task.explain(lvl + 1)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class LoadTableTask(Task):
     file_path: Path
 
@@ -90,14 +100,13 @@ class LoadTableTask(Task):
         block_start = self.block_starts[job.block_id]
         with self.file_path.open(mode="rb") as f:
             f.seek(block_start)
-            block_data = deserialize_block(f, self.schema)
+            block_data = deserialize_block(f, self.file_schema)
             for row in zip(*block_data):
-                yield {name: val for val, (name, _) in zip(row, self.schema)}
+                yield {name: val for val, (name, _) in zip(row, self.file_schema)}
 
     @cached_property
-    def schema(self) -> Schema:
-        with self.file_path.open(mode="rb") as f:
-            return list(deserialize_schema(f))
+    def file_schema(self) -> Schema:
+        return BlockFile(self.file_path).file_schema
 
     @cached_property
     def block_starts(self) -> list[int]:
@@ -107,7 +116,7 @@ class LoadTableTask(Task):
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
         assert schema == []
-        return self.schema
+        return self.file_schema
 
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
         yield from self.parent_task.create_jobs(full_task, worker_count)
@@ -116,11 +125,13 @@ class LoadTableTask(Task):
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} LoadTable({self.file_path})")
+        print(
+            f"{indent} LoadTable({self.file_path}):{nice_schema(self.inferred_schema)}"
+        )
         self.parent_task.explain(lvl + 1)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class LoadShuffleFileTask(Task):
     stage_to_load: int = -1
 
@@ -135,8 +146,7 @@ class LoadShuffleFileTask(Task):
                 yield {name: val for val, (name, _) in zip(row, schema)}
 
     def load_schema(self, shuffle_file: Path) -> Schema:
-        with shuffle_file.open(mode="rb") as f:
-            return list(deserialize_schema(f))
+        return BlockFile(shuffle_file).file_schema
 
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
         assert self.stage_to_load != -1
@@ -163,11 +173,13 @@ class LoadShuffleFileTask(Task):
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} LoadShuffleFile(stage_to_load={self.stage_to_load})")
+        print(
+            f"{indent} LoadShuffleFile(stage_to_load={self.stage_to_load}):{nice_schema(self.inferred_schema)}"
+        )
         self.parent_task.explain(lvl + 1)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class FilterTask(Task):
     column: Col
 
@@ -189,18 +201,18 @@ class FilterTask(Task):
             col for col in referenced_column_names if col not in schema_cols
         ]
         if unknown_cols:
-            raise Exception(f"Unknown columns in filter: {unknown_cols}")
+            raise ValueError(f"Unknown columns in Filter: {unknown_cols}")
         return schema
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} Filter({self.column})")
+        print(f"{indent} Filter({self.column}):{nice_schema(self.inferred_schema)}")
         self.parent_task.explain(lvl + 1)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class GroupByTask(Task):
-    column: Col
+    column: Col | None = None
 
     def execute(self, job: Job) -> Iterable[Row]:
         assert self.column is not None
@@ -212,6 +224,8 @@ class GroupByTask(Task):
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
+        if self.column is None:
+            return schema
         referenced_column_names = [
             col.name for col in self.column.all_nested_columns if type(col) is Col
         ]
@@ -221,15 +235,17 @@ class GroupByTask(Task):
         ]
         if unknown_cols:
             raise Exception(f"Unknown columns in GroupBy: {unknown_cols}")
-        return [(self.column.name, ColumnType.UNKNOWN)]
+        return [
+            (self.column.name, self.column.infer_type(schema)),
+        ]
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} GroupBy({self.column})")
+        print(f"{indent} GroupBy({self.column}):{nice_schema(self.inferred_schema)}")
         self.parent_task.explain(lvl + 1)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class JoinTask(Task):
     right_side_task: Task
     join_condition: Col
@@ -303,6 +319,15 @@ class JoinTask(Task):
         ]
         if unknown_cols:
             raise Exception(f"Unknown columns in Join: {unknown_cols}")
+        assert type(self.join_condition) is BinaryOperatorColumn
+        self.left_key = self.join_condition.left_side
+        self.right_key = self.join_condition.right_side
+        left_grandparent = self.parent_task.parent_task
+        assert type(left_grandparent) is GroupByTask
+        left_grandparent.column = self.left_key
+        right_grandparent = self.right_side_task.parent_task
+        assert type(right_grandparent) is GroupByTask
+        right_grandparent.column = self.right_key
         return left_schema + right_schema
 
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
@@ -313,13 +338,13 @@ class JoinTask(Task):
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(
-            f'{indent} Join({self.join_condition}, "{self.how}", left_shuffle: {self.left_shuffle_stage}, right_shuffle: {self.right_shuffle_stage})'
+            f'{indent} Join({self.join_condition}, "{self.how}", left_shuffle: {self.left_shuffle_stage}, right_shuffle: {self.right_shuffle_stage}):{nice_schema(self.inferred_schema)}'
         )
         self.parent_task.explain(lvl + 1)
         self.right_side_task.explain(lvl + 1)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class CountTask(Task):
     group_by_column: Col
     counter: dict[Any, int] = field(default_factory=lambda: Counter())
@@ -336,13 +361,13 @@ class CountTask(Task):
         schema = self.parent_task.validate_schema()
         assert self.group_by_column.name in {col_name for col_name, _ in schema}
         return [
-            (self.group_by_column.name, ColumnType.UNKNOWN),
+            (self.group_by_column.name, self.group_by_column.infer_type(schema)),
             ("count", ColumnType.INTEGER),
         ]
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} Count()")
+        print(f"{indent} Count():{nice_schema(self.inferred_schema)}")
         self.parent_task.explain(lvl + 1)
 
 
@@ -364,7 +389,7 @@ class ShuffleToFileTask(Task):
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} ShuffleToFile()")
+        print(f"{indent} ShuffleToFile():{nice_schema(self.inferred_schema)}")
         self.parent_task.explain(lvl + 1)
 
 

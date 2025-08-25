@@ -15,20 +15,20 @@ from .tasks import (
     JoinTask,
     CountTask,
 )
-from .query import Executor, Analyzer
+from .query import Executor
 from .constants import Row
 
 
 class GroupedData:
     def __init__(self, df: "DataFrame", column: Col):
         self.df = df
-        self.df.task = GroupByTask(self.df.task, column)
+        self.df.task = GroupByTask(self.df.task, column=column)
         self.group_column = column
 
     def count(self) -> "DataFrame":
         self.df.task = ShuffleToFileTask(self.df.task)
         self.df.task = LoadShuffleFileTask(self.df.task)
-        self.df.task = CountTask(self.df.task, self.group_column)
+        self.df.task = CountTask(self.df.task, group_by_column=self.group_column)
         return self.df
 
 
@@ -37,7 +37,7 @@ class DataFrame:
         self.task: Task = VoidTask()
 
     def table(self, file_path: str) -> Self:
-        self.task = LoadTableTask(self.task, Path(file_path))
+        self.task = LoadTableTask(self.task, file_path=Path(file_path))
         return self
 
     def collect(self) -> list[Row]:
@@ -56,16 +56,14 @@ class DataFrame:
 
     @property
     def schema(self) -> Schema:
-        return Analyzer.analyze(self.task)
+        return self.task.validate_schema()
 
     def select(self, *columns: Col) -> Self:
-        if columns == ():
-            columns = tuple(Col(col_name) for col_name, _ in self.schema)
-        self.task = ProjectTask(self.task, list(columns))
+        self.task = ProjectTask(self.task, columns=list(columns))
         return self
 
     def filter(self, column: Col) -> Self:
-        self.task = FilterTask(self.task, column)
+        self.task = FilterTask(self.task, column=column)
         return self
 
     def group_by(self, column: Col) -> GroupedData:
@@ -74,16 +72,14 @@ class DataFrame:
     def join(self, other_df: Self, on: Col, how: JoinType):
         assert type(on) is BinaryOperatorColumn
         # TODO: extract left,right side correctly (maybe in analyze)
-        self.task = GroupByTask(self.task, column=on.left_side)
+        self.task = GroupByTask(self.task)
         self.task = ShuffleToFileTask(self.task)
-        other_df.task = GroupByTask(other_df.task, column=on.right_side)
+        other_df.task = GroupByTask(other_df.task)
         other_df.task = ShuffleToFileTask(other_df.task)
         self.task = JoinTask(
             self.task,
-            other_df.task,
-            on,
-            how,
-            left_key=on.left_side,
-            right_key=on.right_side,
+            right_side_task=other_df.task,
+            join_condition=on,
+            how=how,
         )
         return self
