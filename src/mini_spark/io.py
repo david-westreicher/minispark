@@ -80,7 +80,7 @@ def serialize_schema(schema: Schema, f: BufferedWriter):
 
 def generate_data_blocks(
     schema: Schema,
-    data: list[tuple[Any, ...]],
+    data: Iterable[tuple[Any, ...]],
     max_block_size: int = constants.BLOCK_SIZE,
 ) -> Iterable[bytes]:
     def binarize_block(column_data: list[bytearray], row_count: int) -> bytes:
@@ -92,21 +92,19 @@ def generate_data_blocks(
         return bytes(block_data)
 
     column_data: list[bytearray] = [bytearray() for _ in schema]
-    i = 0
     current_block_size = 0
     rows = 0
-    while i < len(data):
+    for row in data:
         if current_block_size > max_block_size:
             yield binarize_block(column_data, rows)
             column_data = [bytearray() for _ in schema]
             current_block_size = 0
             rows = 0
-        assert len(data[i]) == len(schema)
-        for j, value in enumerate(data[i]):
+        assert len(row) == len(schema)
+        for j, value in enumerate(row):
             binary_value = binarize_value(value)
             current_block_size += len(binary_value)
             column_data[j].extend(binary_value)
-        i += 1
         rows += 1
     if any(d for d in column_data):
         yield binarize_block(column_data, rows)
@@ -114,7 +112,7 @@ def generate_data_blocks(
 
 def serialize(
     schema: Schema,
-    data: list[tuple[Any, ...]],
+    data: Iterable[tuple[Any, ...]],
     output_file: Path,
     block_size: int = constants.BLOCK_SIZE,
 ):
@@ -126,7 +124,7 @@ def serialize(
             f.write(data_block)
         for block_size in block_starts:
             f.write(binarize_value(block_size))
-        print("Serialize, block numbers:", len(block_starts))
+        print("Serialize, block numbers:", len(block_starts), output_file)
         f.write(to_unsigned_int(len(block_starts)))
 
 
@@ -140,7 +138,7 @@ def append(data: list[tuple[Any, ...]], output_file: Path):
             f.write(data_block)
         for block_size in block_starts:
             f.write(binarize_value(block_size))
-        print("Serialize, block numbers:", len(block_starts))
+        print("Append, block numbers:", len(block_starts), output_file)
         f.write(to_unsigned_int(len(block_starts)))
 
 
@@ -267,6 +265,12 @@ class BlockFile:
             schema = [
                 (f"col_{i}", ColumnType.of(value)) for i, value in enumerate(first_row)
             ]
+        return self.write_data_with_known_schema(data, schema)
+
+    def write_data_with_known_schema(
+        self, data: Iterable[tuple[Any, ...]], schema: Schema = []
+    ) -> Self:
+        assert schema
         serialize(schema, data, self.file, block_size=self.block_size)
         return self
 
@@ -341,3 +345,18 @@ class BlockFile:
     def read_data_rows(self) -> Iterable[Row]:
         for block in self.read_blocks_sequentially():
             yield from block
+
+    def read_data(self) -> Iterable[tuple[Any, ...]]:
+        schema = self.file_schema
+        block_starts = self.block_starts
+        with self.file.open("rb") as f:
+            for block_start in block_starts:
+                f.seek(block_start)
+                block_data = deserialize_block(f, schema)
+                yield from zip(*block_data)
+
+    def merge_files(self, files: list[Path]) -> Self:
+        schema = BlockFile(files[0]).file_schema
+        assert all(BlockFile(f).file_schema == schema for f in files)
+        full_data_iterator = (row for f in files for row in BlockFile(f).read_data())
+        return self.write_data_with_known_schema(full_data_iterator, schema)

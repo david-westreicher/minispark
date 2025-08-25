@@ -12,9 +12,8 @@ from .tasks import (
     VoidTask,
     ShuffleToFileTask,
 )
-from .constants import Row
+from .constants import Row, USE_WORKERS
 
-USE_WORKERS = True
 worker_id = 0
 id_queue: "Queue[int]" = Queue()
 
@@ -42,7 +41,7 @@ class Executor:
                 print("#" * 100)
                 print("Stage", i)
                 stage.explain()
-                jobs = list(stage.create_jobs(stage, self.worker_count, i))
+                jobs = list(stage.create_jobs(stage, self.worker_count))
                 for job in jobs:
                     job.current_stage = i
                     if job.shuffle_file is not None:

@@ -1,14 +1,23 @@
-from mini_spark.algorithms import SORT_BLOCK_SIZE, external_sort, kway_merge
+from mini_spark.algorithms import (
+    SORT_BLOCK_SIZE,
+    external_merge_join,
+    external_sort,
+    kway_merge,
+)
 from mini_spark.io import BlockFile
 from mini_spark.constants import Row
 from pathlib import Path
+from typing import Any, Callable
 from unittest.mock import Mock, call
 from random import shuffle
 import random
+import pytest
 
 
-# TODO: parametrize on col_0, col_1 (sorted string or ints)
-def test_external_sort(tmp_path: Path):
+@pytest.mark.parametrize(
+    "key_function", [lambda row: row["int_col"], lambda row: row["str_col"]]
+)
+def test_external_sort(tmp_path: Path, key_function: Callable[[Row], Any]):
     # arrange
     input_file = tmp_path / "input.bin"
     tmp_file = tmp_path / "temp.bin"
@@ -19,7 +28,6 @@ def test_external_sort(tmp_path: Path):
     ]
     shuffle(input_data)
     BlockFile(input_file, block_size=SORT_BLOCK_SIZE).write_data_rows(input_data)
-    key_function = lambda row: row["int_col"]  # noqa: E731
 
     # act
     external_sort(input_file, key_function, output_file, tmp_file)
@@ -89,3 +97,65 @@ def test_kway_merge_uncomparable():
     # assert
     expected_calls = [call([(1, 1 + 2j), (1, 3 + 1j)])]
     assert result_action.call_args_list == expected_calls
+
+
+def test_external_merge_join(tmp_path: Path):
+    # arrange
+    left_file = tmp_path / "left.bin"
+    right_file = tmp_path / "right.bin"
+    left_input_data: list[Row] = [
+        {"id": "1", "val": 1},
+        {"id": "2", "val": 2},
+        {"id": "duplicate", "val": 4},
+        {"id": "duplicate", "val": 5},
+        {"id": "duplicate_right", "val": 6},
+        {"id": "no_join_partner", "val": 0},
+    ]
+    right_input_data: list[Row] = [
+        {"id": "1", "other": 2},
+        {"id": "2", "other": 3},
+        {"id": "duplicate", "other": 6},
+        {"id": "duplicate_right", "other": 7},
+        {"id": "duplicate_right", "other": 8},
+    ]
+    BlockFile(left_file, block_size=SORT_BLOCK_SIZE).write_data_rows(left_input_data)
+    BlockFile(right_file, block_size=SORT_BLOCK_SIZE).write_data_rows(right_input_data)
+    key = lambda row: row["id"]  # noqa: E731
+
+    # act
+    joined_data = list(external_merge_join(left_file, right_file, key, key, "inner"))
+
+    # assert
+    expected_joined_data = [
+        {
+            "id": "1",
+            "val": 1,
+            "other": 2,
+        },
+        {
+            "id": "2",
+            "val": 2,
+            "other": 3,
+        },
+        {
+            "id": "duplicate",
+            "val": 4,
+            "other": 6,
+        },
+        {
+            "id": "duplicate",
+            "val": 5,
+            "other": 6,
+        },
+        {
+            "id": "duplicate_right",
+            "val": 6,
+            "other": 7,
+        },
+        {
+            "id": "duplicate_right",
+            "val": 6,
+            "other": 8,
+        },
+    ]
+    assert joined_data == expected_joined_data

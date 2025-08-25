@@ -1,6 +1,6 @@
 from .io import BlockFile
 from .constants import Row
-from typing import Any, Callable, TypeVar, Iterator
+from typing import Any, Callable, TypeVar, Iterator, Iterable
 from pathlib import Path
 from heapq import heappop, heappush
 
@@ -69,5 +69,35 @@ def kway_merge(
         action(curr_result)
 
 
-def external_merge_join(files_to_sort, key_col: Callable[[Row], Any]):
-    pass
+def external_merge_join(
+    left_file: Path,
+    right_file: Path,
+    left_key: Callable[[Row], Any],
+    right_key: Callable[[Row], Any],
+    join_type: str,
+) -> Iterable[Row]:
+    left_iterator = iter(BlockFile(left_file).read_data_rows())
+    right_iterator = iter(BlockFile(right_file).read_data_rows())
+    left_iterator = iter(BlockFile(left_file).read_data_rows())
+    right_iterator = iter(BlockFile(right_file).read_data_rows())
+    left = next(left_iterator, None)
+    right = next(right_iterator, None)
+    while left is not None and right is not None:
+        if left_key(left) == right_key(right):
+            lefts = [left]
+            while (left := next(left_iterator, None)) and left_key(left) == left_key(
+                lefts[0]
+            ):
+                lefts.append(left)
+            rights = [right]
+            while (right := next(right_iterator, None)) and right_key(
+                right
+            ) == right_key(rights[0]):
+                rights.append(right)
+            for ls in lefts:
+                for rs in rights:
+                    yield {**ls, **rs}
+        elif left is not None and left_key(left) < right_key(right):
+            left = next(left_iterator, None)
+        else:
+            right = next(right_iterator, None)

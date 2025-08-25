@@ -91,3 +91,83 @@ def test_groupby(test_data: str):
     rows.sort(key=sort_key)
     expected_rows.sort(key=sort_key)
     assert rows == expected_rows
+
+
+def test_join(test_data: str):
+    # act
+    rows = (
+        DataFrame()
+        .table(test_data)
+        .select(Col("fruit").alias("fruit_left"), Col("color"))
+        .join(
+            DataFrame()
+            .table(test_data)
+            .select(Col("fruit").alias("fruit_right"), Col("quantity")),
+            on=Col("fruit_left") == Col("fruit_right"),
+            how="inner",
+        )
+        .collect()
+    )
+
+    # assert
+    print(rows)
+    expected_rows = [
+        {
+            "fruit_left": "apple",
+            "fruit_right": "apple",
+            "color": "green",
+            "quantity": 3,
+        },
+        {
+            "fruit_left": "apple",
+            "fruit_right": "apple",
+            "color": "red",
+            "quantity": 3,
+        },
+        {
+            "fruit_left": "apple",
+            "fruit_right": "apple",
+            "color": "green",
+            "quantity": 4,
+        },
+        {
+            "fruit_left": "apple",
+            "fruit_right": "apple",
+            "color": "red",
+            "quantity": 4,
+        },
+        {
+            "fruit_left": "banana",
+            "fruit_right": "banana",
+            "color": "yellow",
+            "quantity": 5,
+        },
+        {
+            "fruit_left": "banana",
+            "fruit_right": "banana",
+            "color": "yellow",
+            "quantity": 7,
+        },
+        {
+            "fruit_left": "banana",
+            "fruit_right": "banana",
+            "color": "yellow",
+            "quantity": 5,
+        },
+        {
+            "fruit_left": "banana",
+            "fruit_right": "banana",
+            "color": "yellow",
+            "quantity": 7,
+        },
+        {
+            "fruit_left": "orange",
+            "fruit_right": "orange",
+            "color": "orange",
+            "quantity": 2,
+        },
+    ]
+    sort_key = lambda row: (row["fruit_left"], row["color"], row["quantity"])  # noqa: E731
+    rows.sort(key=sort_key)
+    expected_rows.sort(key=sort_key)
+    assert rows == expected_rows

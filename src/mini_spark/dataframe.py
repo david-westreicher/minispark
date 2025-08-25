@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Self
-from .sql import Col
+from .sql import BinaryOperatorColumn, Col
 from .io import Schema
 from .tasks import (
     Task,
@@ -72,7 +72,18 @@ class DataFrame:
         return GroupedData(self, column)
 
     def join(self, other_df: Self, on: Col, how: JoinType):
+        assert type(on) is BinaryOperatorColumn
+        # TODO: extract left,right side correctly (maybe in analyze)
+        self.task = GroupByTask(self.task, column=on.left_side)
         self.task = ShuffleToFileTask(self.task)
+        other_df.task = GroupByTask(other_df.task, column=on.right_side)
         other_df.task = ShuffleToFileTask(other_df.task)
-        self.task = JoinTask(self.task, other_df.task, on, how)
+        self.task = JoinTask(
+            self.task,
+            other_df.task,
+            on,
+            how,
+            left_key=on.left_side,
+            right_key=on.right_side,
+        )
         return self
