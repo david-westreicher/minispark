@@ -183,41 +183,6 @@ class FilterTask(Task):
 
 
 @dataclass(kw_only=True)
-class GroupByTask(Task):
-    column: Col | None = None
-
-    def execute(self, job: Job) -> Iterable[Row]:
-        assert self.column is not None
-        result: dict[str, list[Row]] = defaultdict(list)
-        for row in self.parent_task.execute(job):
-            result[self.column.execute(row)].append(row)
-        for key, rows in result.items():
-            yield Row(key=key, rows=rows)
-
-    def validate_schema(self) -> Schema:
-        schema = self.parent_task.validate_schema()
-        if self.column is None:
-            return schema
-        referenced_column_names = [
-            col.name for col in self.column.all_nested_columns if type(col) is Col
-        ]
-        schema_cols = {col_name for col_name, _ in schema}
-        unknown_cols = [
-            col for col in referenced_column_names if col not in schema_cols
-        ]
-        if unknown_cols:
-            raise Exception(f"Unknown columns in GroupBy: {unknown_cols}")
-        return [
-            (self.column.name, self.column.infer_type(schema)),
-        ]
-
-    def explain(self, lvl: int = 0):
-        indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} GroupBy({self.column}):{nice_schema(self.inferred_schema)}")
-        self.parent_task.explain(lvl + 1)
-
-
-@dataclass(kw_only=True)
 class JoinTask(Task):
     right_side_task: Task
     join_condition: Col
@@ -292,14 +257,15 @@ class JoinTask(Task):
         if unknown_cols:
             raise Exception(f"Unknown columns in Join: {unknown_cols}")
         assert type(self.join_condition) is BinaryOperatorColumn
+        # TODO: decompose join_condition: distribute the right keys to right shuffle task
         self.left_key = self.join_condition.left_side
         self.right_key = self.join_condition.right_side
-        left_grandparent = self.parent_task.parent_task
-        assert type(left_grandparent) is GroupByTask
-        left_grandparent.column = self.left_key
-        right_grandparent = self.right_side_task.parent_task
-        assert type(right_grandparent) is GroupByTask
-        right_grandparent.column = self.right_key
+        left_parent = self.parent_task
+        assert type(left_parent) is ShuffleToFileTask
+        left_parent.column = self.left_key
+        right_parent = self.right_side_task
+        assert type(right_parent) is ShuffleToFileTask
+        right_parent.column = self.right_key
         return left_schema + right_schema
 
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
@@ -345,11 +311,14 @@ class CountTask(Task):
 
 @dataclass
 class ShuffleToFileTask(Task):
+    column: Col | None = None
+
     def execute(self, job: Job) -> Iterable[Row]:
+        assert self.column is not None
         shuffle_buckets: dict[int, list[Row]] = defaultdict(list)
         for row in self.parent_task.execute(job):
-            destination_shuffle = hash(row["key"]) % job.worker_count
-            shuffle_buckets[destination_shuffle].extend(row["rows"])
+            destination_shuffle = hash(self.column.execute(row)) % job.worker_count
+            shuffle_buckets[destination_shuffle].append(row)
         for shuffle_bucket, rows in shuffle_buckets.items():
             shuffle_file = Path(
                 SHUFFLE_FOLDER
@@ -359,9 +328,28 @@ class ShuffleToFileTask(Task):
             BlockFile(shuffle_file).append_rows(rows)
         return []
 
+    def validate_schema(self) -> Schema:
+        schema = self.parent_task.validate_schema()
+        if self.column is None:
+            return schema
+        referenced_column_names = [
+            col.name for col in self.column.all_nested_columns if type(col) is Col
+        ]
+        schema_cols = {col_name for col_name, _ in schema}
+        unknown_cols = [
+            col for col in referenced_column_names if col not in schema_cols
+        ]
+        if unknown_cols:
+            raise Exception(f"Unknown columns in GroupBy: {unknown_cols}")
+        return [
+            (self.column.name, self.column.infer_type(schema)),
+        ]
+
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} ShuffleToFile():{nice_schema(self.inferred_schema)}")
+        print(
+            f"{indent} ShuffleToFile({self.column}):{nice_schema(self.inferred_schema)}"
+        )
         self.parent_task.explain(lvl + 1)
 
 

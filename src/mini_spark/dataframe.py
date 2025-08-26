@@ -7,7 +7,6 @@ from .tasks import (
     LoadTableTask,
     ProjectTask,
     FilterTask,
-    GroupByTask,
     ShuffleToFileTask,
     LoadShuffleFileTask,
     JoinType,
@@ -21,11 +20,10 @@ from .constants import Row, Schema
 class GroupedData:
     def __init__(self, df: "DataFrame", column: Col):
         self.df = df
-        self.df.task = GroupByTask(self.df.task, column=column)
         self.group_column = column
 
     def count(self) -> "DataFrame":
-        self.df.task = ShuffleToFileTask(self.df.task)
+        self.df.task = ShuffleToFileTask(self.df.task, column=self.group_column)
         self.df.task = LoadShuffleFileTask(self.df.task)
         self.df.task = CountTask(self.df.task, group_by_column=self.group_column)
         return self.df
@@ -71,9 +69,7 @@ class DataFrame:
     def join(self, other_df: Self, on: Col, how: JoinType):
         assert type(on) is BinaryOperatorColumn
         # TODO: extract left,right side correctly (maybe in analyze)
-        self.task = GroupByTask(self.task)
         self.task = ShuffleToFileTask(self.task)
-        other_df.task = GroupByTask(other_df.task)
         other_df.task = ShuffleToFileTask(other_df.task)
         self.task = JoinTask(
             self.task,

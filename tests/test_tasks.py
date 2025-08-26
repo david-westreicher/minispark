@@ -1,6 +1,5 @@
 from mini_spark.sql import ColumnType, Col, Lit
 from mini_spark.tasks import (
-    GroupByTask,
     JoinTask,
     FilterTask,
     ProjectTask,
@@ -161,16 +160,14 @@ def test_schema_propagation_join_task():
     # arrange
     test_table_schema = [("left_id", ColumnType.STRING), ("b", ColumnType.INTEGER)]
     task = JoinTask(
-        ShuffleToFileTask(GroupByTask(LoadTableTask(VoidTask(), file_path=Path()))),
+        ShuffleToFileTask(LoadTableTask(VoidTask(), file_path=Path())),
         right_side_task=ShuffleToFileTask(
-            GroupByTask(
-                ProjectTask(
-                    LoadTableTask(VoidTask(), file_path=Path()),
-                    columns=[
-                        Col("left_id").alias("right_id"),
-                        Col("b").alias("c"),
-                    ],
-                )
+            ProjectTask(
+                LoadTableTask(VoidTask(), file_path=Path()),
+                columns=[
+                    Col("left_id").alias("right_id"),
+                    Col("b").alias("c"),
+                ],
             )
         ),
         join_condition=Col("left_id") == Col("right_id"),
