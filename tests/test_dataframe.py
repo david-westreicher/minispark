@@ -90,6 +90,18 @@ def test_select_star(test_data: str):
     ]
 
 
+def test_filter(test_data: str):
+    # act
+    rows = DataFrame().table(test_data).filter(Col("quantity") > 3).collect()
+
+    # assert
+    assert rows == [
+        {"fruit": "banana", "quantity": 5, "color": "yellow"},
+        {"fruit": "apple", "quantity": 4, "color": "green"},
+        {"fruit": "banana", "quantity": 7, "color": "yellow"},
+    ]
+
+
 def test_groupby(test_data: str):
     # act
     rows = DataFrame().table(test_data).group_by(Col("fruit")).count().collect()

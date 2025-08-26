@@ -11,7 +11,8 @@ from .tasks import (
     VoidTask,
     ShuffleToFileTask,
 )
-from .constants import Row, USE_WORKERS
+from .constants import Columns, Row, USE_WORKERS
+from .utils import convert_columns_to_rows
 
 worker_id = 0
 id_queue: "Queue[int]" = Queue()
@@ -39,6 +40,7 @@ class Executor:
             for i, stage in enumerate(stages):
                 print("#" * 100)
                 print("Stage", i)
+                assert stage.inferred_schema is not None
                 stage.explain()
                 jobs = list(stage.create_jobs(stage, self.worker_count))
                 for job in jobs:
@@ -52,12 +54,16 @@ class Executor:
                     for job_result in worker_pool.imap_unordered(
                         self.execute_job_group_on_worker, grouped_jobs
                     ):
-                        yield from job_result
+                        yield from convert_columns_to_rows(
+                            job_result, stage.inferred_schema
+                        )
                 else:
                     for job_result in map(
                         self.execute_job_group_on_worker, grouped_jobs
                     ):
-                        yield from job_result
+                        yield from convert_columns_to_rows(
+                            job_result, stage.inferred_schema
+                        )
             for shuffle_file in shuffle_files_to_delete:
                 shuffle_file.unlink(missing_ok=True)
 
@@ -77,8 +83,8 @@ class Executor:
             [job] for job in single_worker_jobs
         ]
 
-    def execute_job_group_on_worker(self, jobs: list[Job]) -> list[Row]:
-        final_result = []
+    def execute_job_group_on_worker(self, jobs: list[Job]) -> Columns:
+        final_result: Columns = ()
         for job in jobs:
             if USE_WORKERS:
                 if job.worker_id == -1:
@@ -90,7 +96,7 @@ class Executor:
                 job.worker_count = 2
             assert job.worker_id <= self.worker_count
             # print("Job started", job.task.__class__.__name__, job.worker_id)
-            final_result = list(job.execute())
+            final_result = job.execute()
             # print("Job finished", job.task.__class__.__name__, job.worker_id)
         return final_result
 

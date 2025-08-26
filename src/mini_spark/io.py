@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import os
 from contextlib import ExitStack
 from . import constants
-from .constants import Row, Schema, ColumnType
+from .constants import Row, Schema, ColumnType, Columns
 
 
 def validate(schema, data):
@@ -18,7 +18,7 @@ def validate(schema, data):
 
 def binarize_value(value) -> bytes:
     if type(value) is int:
-        return value.to_bytes(4, byteorder="big", signed=True)
+        return value.to_bytes(4, byteorder="little", signed=True)
     elif type(value) is str:
         assert len(value) < 255
         return bytes([len(value) & 0xFF] + list(value.encode("utf-8")))
@@ -26,11 +26,11 @@ def binarize_value(value) -> bytes:
 
 
 def to_unsigned_int(value: int) -> bytes:
-    return value.to_bytes(4, byteorder="big", signed=False)
+    return value.to_bytes(4, byteorder="little", signed=False)
 
 
 def read_unsigned_int(f: BinaryIO) -> int:
-    return int.from_bytes(f.read(4), byteorder="big", signed=False)
+    return int.from_bytes(f.read(4), byteorder="little", signed=False)
 
 
 def _serialize_schema(schema: Schema, f: BufferedWriter):
@@ -98,7 +98,7 @@ def _deserialize_block_starts(f: BinaryIO) -> list[int]:
     block_sizes = []
     f.seek(-4 * block_counts - 4, os.SEEK_CUR)
     for _ in range(block_counts):
-        block_sizes.append(int.from_bytes(f.read(4), byteorder="big", signed=True))
+        block_sizes.append(read_unsigned_int(f))
     return block_sizes
 
 
@@ -124,7 +124,7 @@ def _deserialize_block_column(
     curr_chunk: list[Any] = []
     if col_type == ColumnType.INTEGER:
         while rows_read < block_rows:
-            int_value = int.from_bytes(f.read(4), byteorder="big", signed=True)
+            int_value = int.from_bytes(f.read(4), byteorder="little", signed=True)
             curr_chunk.append(int_value)
             rows_read += 1
             if len(curr_chunk) > chunk_size:
@@ -145,7 +145,7 @@ def _deserialize_block_column(
         yield curr_chunk
 
 
-def _deserialize_block(f: BinaryIO, schema) -> list[list[Any]]:
+def _deserialize_block(f: BinaryIO, schema) -> Columns:
     block_rows = read_unsigned_int(f)
     data: list[list[Any]] = [[] for _ in schema]
     block_data_start = f.tell()
@@ -156,7 +156,7 @@ def _deserialize_block(f: BinaryIO, schema) -> list[list[Any]]:
             for row in chunk
         )
         f.seek(block_data_start)
-    return data
+    return tuple(data)
 
 
 @dataclass
@@ -200,11 +200,14 @@ class BlockFile:
                 block_starts.append(f.tell())
                 f.write(data_block)
             for block_size in block_starts:
-                f.write(binarize_value(block_size))
+                f.write(to_unsigned_int(block_size))
             f.write(to_unsigned_int(len(block_starts)))
         return self
 
-    def append_data(self, data: list[tuple[Any, ...]]) -> Self:
+    def append_data(self, data: list[tuple[Any, ...]], schema: Schema = []) -> Self:
+        if not self.file.exists():
+            self.write_data(data, schema)
+            return self
         schema = self.file_schema
         block_starts = self.block_starts
         with self.file.open(mode="rb+") as f:
@@ -213,7 +216,7 @@ class BlockFile:
                 block_starts.append(f.tell())
                 f.write(data_block)
             for block_size in block_starts:
-                f.write(binarize_value(block_size))
+                f.write(to_unsigned_int(block_size))
             print("Append, block numbers:", len(block_starts), self.file)
             f.write(to_unsigned_int(len(block_starts)))
         return self
@@ -239,12 +242,16 @@ class BlockFile:
         for block in self.read_blocks_sequentially():
             yield from block
 
-    def read_block_data(self, block_start: int) -> list[tuple[Any, ...]]:
+    def read_block_data(self, block_id: int) -> list[tuple[Any, ...]]:
+        block_data_columns = self.read_block_data_columns_by_id(block_id)
+        return list(zip(*block_data_columns))
+
+    def read_block_data_columns_by_id(self, block_id: int) -> Columns:
         schema = self.file_schema
+        block_start = self.block_starts[block_id]
         with self.file.open("rb") as f:
             f.seek(block_start)
-            block_data = _deserialize_block(f, schema)
-            return list(zip(*block_data))
+            return _deserialize_block(f, schema)
 
     def read_block_rows(self, block_id: int) -> Iterable[Row]:
         schema = self.file_schema
@@ -256,9 +263,8 @@ class BlockFile:
 
     def read_blocks_sequentially(self) -> Iterable[list[Row]]:
         schema = self.file_schema
-        block_starts = self.block_starts
-        for block_start in block_starts:
-            block_data = self.read_block_data(block_start)
+        for block_id in range(len(self.block_starts)):
+            block_data = self.read_block_data(block_id)
             row_data = [
                 {col_name: val for val, (col_name, _) in zip(row, schema)}
                 for row in block_data

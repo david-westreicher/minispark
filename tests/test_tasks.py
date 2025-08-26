@@ -126,7 +126,7 @@ def test_schema_propagation_filter_task():
     test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
     task = FilterTask(
         LoadTableTask(VoidTask(), file_path=Path()),
-        column=Col("a") > Col("b"),
+        condition=Col("a") > Col("b"),
     )
 
     # act
@@ -143,7 +143,7 @@ def test_schema_propagation_filter_task_fails():
     test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
     task = FilterTask(
         LoadTableTask(VoidTask(), file_path=Path()),
-        column=Col("c") > Lit(5),
+        condition=Col("c") > Lit(5),
     )
 
     # act / assert

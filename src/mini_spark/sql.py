@@ -42,6 +42,9 @@ class Col:
     def execute(self, row: dict[str, Any]) -> Any:
         return row[self.name]
 
+    def execute_row(self, row: tuple[Any, ...]) -> Any:
+        raise NotImplementedError()
+
     def alias(self, name: str):
         return AliasColumn(self, name)
 
@@ -57,8 +60,29 @@ class Col:
             raise ValueError(f"Column {self.name} not found in schema {schema}")
         return col_type
 
+    def schema_executor(self, schema: Schema) -> "Col":
+        col_pos = next(
+            (i for i, (col_name, _) in enumerate(schema) if col_name == self.name), None
+        )
+        if col_pos is None:
+            raise ValueError(f"Column {self.name} not found in schema {schema}")
+        return SchemaCol(self.name, col_pos)
+
     def __str__(self) -> str:
         return self.name
+
+
+@dataclass
+class SchemaCol(Col):
+    def __init__(self, name: str, col_pos: int):
+        super().__init__(name)
+        self.col_pos = col_pos
+
+    def execute(self, row: dict[str, Any]) -> Any:
+        raise NotImplementedError()
+
+    def execute_row(self, row: tuple[Any, ...]) -> Any:
+        return row[self.col_pos]
 
 
 @dataclass
@@ -74,11 +98,17 @@ class AliasColumn(Col):
     def execute(self, row: dict[str, Any]) -> Any:
         return self.original_col.execute(row)
 
+    def execute_row(self, row: tuple[Any, ...]) -> Any:
+        return self.original_col.execute_row(row)
+
     def __str__(self) -> str:
         return f"({self.original_col}) AS {self.name}"
 
     def infer_type(self, schema: Schema) -> ColumnType:
         return self.original_col.infer_type(schema)
+
+    def schema_executor(self, schema: Schema) -> "Col":
+        return self.original_col.schema_executor(schema)
 
 
 OP_SYMBOLS = {
@@ -116,6 +146,11 @@ class BinaryOperatorColumn(Col):
     def execute(self, row: dict[str, Any]) -> Any:
         return self.operator(self.left_side.execute(row), self.right_side.execute(row))
 
+    def execute_row(self, row: tuple[Any, ...]) -> Any:
+        return self.operator(
+            self.left_side.execute_row(row), self.right_side.execute_row(row)
+        )
+
     @property
     def all_nested_columns(self) -> Iterable[Col]:
         yield self
@@ -134,6 +169,13 @@ class BinaryOperatorColumn(Col):
             )
         return left_type
 
+    def schema_executor(self, schema: Schema) -> "Col":
+        return BinaryOperatorColumn(
+            self.left_side.schema_executor(schema),
+            self.right_side.schema_executor(schema),
+            self.operator,
+        )
+
 
 @dataclass
 class Lit(Col):
@@ -145,6 +187,9 @@ class Lit(Col):
     def execute(self, row: dict[str, Any]) -> Any:
         return self.value
 
+    def execute_row(self, row: tuple[Any, ...]) -> Any:
+        return self.value
+
     @property
     def all_nested_columns(self) -> Iterable[Col]:
         yield from []
@@ -154,3 +199,6 @@ class Lit(Col):
 
     def infer_type(self, schema: Schema) -> ColumnType:
         return ColumnType.of(self.value)
+
+    def schema_executor(self, schema: Schema) -> "Col":
+        return self

@@ -78,8 +78,6 @@ def external_merge_join(
 ) -> Iterable[Row]:
     left_iterator = iter(BlockFile(left_file).read_data_rows())
     right_iterator = iter(BlockFile(right_file).read_data_rows())
-    left_iterator = iter(BlockFile(left_file).read_data_rows())
-    right_iterator = iter(BlockFile(right_file).read_data_rows())
     left = next(left_iterator, None)
     right = next(right_iterator, None)
     while left is not None and right is not None:

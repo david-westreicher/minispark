@@ -23,7 +23,7 @@ class GroupedData:
         self.group_column = column
 
     def count(self) -> "DataFrame":
-        self.df.task = ShuffleToFileTask(self.df.task, column=self.group_column)
+        self.df.task = ShuffleToFileTask(self.df.task, key_column=self.group_column)
         self.df.task = LoadShuffleFileTask(self.df.task)
         self.df.task = CountTask(self.df.task, group_by_column=self.group_column)
         return self.df
@@ -60,7 +60,7 @@ class DataFrame:
         return self
 
     def filter(self, column: Col) -> Self:
-        self.task = FilterTask(self.task, column=column)
+        self.task = FilterTask(self.task, condition=column)
         return self
 
     def group_by(self, column: Col) -> GroupedData:
