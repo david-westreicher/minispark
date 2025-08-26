@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Self
 from .sql import BinaryOperatorColumn, Col
-from .io import Schema
 from .tasks import (
     Task,
     VoidTask,
@@ -16,7 +15,7 @@ from .tasks import (
     CountTask,
 )
 from .query import Executor
-from .constants import Row
+from .constants import Row, Schema
 
 
 class GroupedData:

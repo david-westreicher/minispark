@@ -1,30 +1,19 @@
 from mini_spark.dataframe import DataFrame, Col
 from pathlib import Path
-from mini_spark.io import ColumnType, serialize
+from mini_spark.io import BlockFile
 
-serialize(
-    schema=[
-        ("id", ColumnType.STRING),
-        ("color", ColumnType.STRING),
-    ],
-    data=[
-        ("apple", "red"),
-        ("banana", "yellow"),
-    ],
-    output_file=Path("fruit_color.bin"),
+BlockFile(Path("fruit_color.bin")).write_rows(
+    [
+        {"id": "apple", "color": "red"},
+        {"id": "banana", "color": "yellow"},
+    ]
 )
-serialize(
-    schema=[
-        ("id", ColumnType.STRING),
-        ("count", ColumnType.INTEGER),
-    ],
-    data=[
-        ("apple", 3),
-        ("banana", 4),
-    ],
-    output_file=Path("fruit_count.bin"),
+BlockFile(Path("fruit_count.bin")).write_rows(
+    [
+        {"id": "apple", "count": 3},
+        {"id": "banana", "count": 4},
+    ]
 )
-
 colors = (
     DataFrame()
     .table("fruit_color.bin")

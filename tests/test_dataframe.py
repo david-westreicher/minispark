@@ -14,7 +14,7 @@ def test_data(tmp_path: Path) -> str:
         {"fruit": "apple", "quantity": 4, "color": "green"},
         {"fruit": "banana", "quantity": 7, "color": "yellow"},
     ]
-    BlockFile(test_file).write_data_rows(test_data)
+    BlockFile(test_file).write_rows(test_data)
     return str(test_file)
 
 

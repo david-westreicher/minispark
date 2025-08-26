@@ -33,7 +33,7 @@ def read_unsigned_int(f: BinaryIO) -> int:
     return int.from_bytes(f.read(4), byteorder="big", signed=False)
 
 
-def serialize_schema(schema: Schema, f: BufferedWriter):
+def _serialize_schema(schema: Schema, f: BufferedWriter):
     # | schema-len |
     # ---- repeat 'schema-len' times ----
     # | column type |
@@ -49,7 +49,7 @@ def serialize_schema(schema: Schema, f: BufferedWriter):
     f.write(bytes(bytes_to_write))
 
 
-def generate_data_blocks(
+def _generate_data_blocks(
     schema: Schema,
     data: Iterable[tuple[Any, ...]],
     max_block_size: int = constants.BLOCK_SIZE,
@@ -81,56 +81,7 @@ def generate_data_blocks(
         yield binarize_block(column_data, rows)
 
 
-def serialize(
-    schema: Schema,
-    data: Iterable[tuple[Any, ...]],
-    output_file: Path,
-    block_size: int = constants.BLOCK_SIZE,
-):
-    with output_file.open(mode="wb") as f:
-        serialize_schema(schema, f)
-        block_starts = []
-        for data_block in generate_data_blocks(schema, data, block_size):
-            block_starts.append(f.tell())
-            f.write(data_block)
-        for block_size in block_starts:
-            f.write(binarize_value(block_size))
-        print("Serialize, block numbers:", len(block_starts), output_file)
-        f.write(to_unsigned_int(len(block_starts)))
-
-
-def append(data: list[tuple[Any, ...]], output_file: Path):
-    with output_file.open(mode="rb+") as f:
-        schema = deserialize_schema(f)
-        block_starts = deserialize_block_starts(f)
-        f.seek(-4 * (len(block_starts) + 1), os.SEEK_END)
-        for data_block in generate_data_blocks(schema, data):
-            block_starts.append(f.tell())
-            f.write(data_block)
-        for block_size in block_starts:
-            f.write(binarize_value(block_size))
-        print("Append, block numbers:", len(block_starts), output_file)
-        f.write(to_unsigned_int(len(block_starts)))
-
-
-def append_rows(data: list[dict[str, Any]], output_file: Path):
-    if not output_file.exists():
-        serialize_rows(data, output_file)
-        return
-    with output_file.open(mode="rb+") as f:
-        schema = deserialize_schema(f)
-    data_tuples = [tuple(row[col_name] for col_name, _ in schema) for row in data]
-    append(data_tuples, output_file)
-
-
-def serialize_rows(data: list[dict[str, Any]], output_file: Path):
-    first_row = data[0]
-    schema = [(col_name, ColumnType.of(value)) for col_name, value in first_row.items()]
-    data_tuples = [tuple(row[col_name] for col_name, _ in schema) for row in data]
-    serialize(schema, data_tuples, output_file)
-
-
-def deserialize_schema(f: BinaryIO) -> Schema:
+def _deserialize_schema(f: BinaryIO) -> Schema:
     schema_len = int(f.read(1)[0])
     schema = []
     for _ in range(schema_len):
@@ -141,7 +92,7 @@ def deserialize_schema(f: BinaryIO) -> Schema:
     return schema
 
 
-def deserialize_block_starts(f: BinaryIO) -> list[int]:
+def _deserialize_block_starts(f: BinaryIO) -> list[int]:
     f.seek(-4, os.SEEK_END)
     block_counts = read_unsigned_int(f)
     block_sizes = []
@@ -151,12 +102,12 @@ def deserialize_block_starts(f: BinaryIO) -> list[int]:
     return block_sizes
 
 
-def deserialize_block_column(
+def _deserialize_block_column(
     f: BinaryIO,
     column_name: str,
     schema: Schema,
     block_rows: int,
-    chunk_size: int = float("inf"),
+    chunk_size: int | float = float("inf"),
 ) -> Iterable[list[Any]]:
     # skip to correct column
     for schema_col_name, _ in schema:
@@ -194,34 +145,18 @@ def deserialize_block_column(
         yield curr_chunk
 
 
-def deserialize_block(
-    f: BinaryIO, schema, offset: int = -1, limit: int = -1
-) -> list[list[Any]]:
+def _deserialize_block(f: BinaryIO, schema) -> list[list[Any]]:
     block_rows = read_unsigned_int(f)
     data: list[list[Any]] = [[] for _ in schema]
     block_data_start = f.tell()
     for i, (col_name, col_type) in enumerate(schema):
         data[i] = list(
             row
-            for chunk in deserialize_block_column(f, col_name, schema, block_rows)
+            for chunk in _deserialize_block_column(f, col_name, schema, block_rows)
             for row in chunk
         )
         f.seek(block_data_start)
     return data
-
-
-def deserialize(input_file: Path) -> tuple[Schema, list[list[Any]]]:
-    with input_file.open("rb") as f:
-        schema = deserialize_schema(f)
-        block_starts = deserialize_block_starts(f)
-        print("Deserialize: block sizes:", len(block_starts))
-        all_data: list[list[Any]] = [[] for _ in schema]
-        for block_start in block_starts:
-            f.seek(block_start)
-            block_data = deserialize_block(f, schema)
-            for i, col_data in enumerate(block_data):
-                all_data[i].extend(col_data)
-        return schema, all_data
 
 
 @dataclass
@@ -230,29 +165,105 @@ class BlockFile:
     block_size: int = constants.BLOCK_SIZE
     schema: Schema = field(default_factory=list)
 
+    @cached_property
+    def block_starts(self) -> list[int]:
+        with self.file.open("rb") as f:
+            return _deserialize_block_starts(f)
+
+    @cached_property
+    def file_schema(self) -> Schema:
+        with self.file.open("rb") as f:
+            return _deserialize_schema(f)
+
     def write_data(self, data: list[tuple[Any, ...]], schema: Schema = []) -> Self:
-        first_row = data[0]
         if not schema:
+            first_row = data[0]
             schema = [
                 (f"col_{i}", ColumnType.of(value)) for i, value in enumerate(first_row)
             ]
-        return self.write_data_with_known_schema(data, schema)
+        return self._write_data_with_known_schema(data, schema)
 
-    def write_data_with_known_schema(
+    def write_rows(self, data: list[Row]) -> Self:
+        first_row = data[0]
+        schema = [(key, ColumnType.of(value)) for key, value in first_row.items()]
+        tuple_data = [tuple(row[key] for key, _ in schema) for row in data]
+        return self._write_data_with_known_schema(tuple_data, schema=schema)
+
+    def _write_data_with_known_schema(
         self, data: Iterable[tuple[Any, ...]], schema: Schema = []
     ) -> Self:
         assert schema
-        serialize(schema, data, self.file, block_size=self.block_size)
+        with self.file.open(mode="wb") as f:
+            _serialize_schema(schema, f)
+            block_starts = []
+            for data_block in _generate_data_blocks(schema, data, self.block_size):
+                block_starts.append(f.tell())
+                f.write(data_block)
+            for block_size in block_starts:
+                f.write(binarize_value(block_size))
+            f.write(to_unsigned_int(len(block_starts)))
         return self
 
-    def append_rows(self, data: list[Row], schema: Schema = []) -> Self:
+    def append_data(self, data: list[tuple[Any, ...]]) -> Self:
+        schema = self.file_schema
+        block_starts = self.block_starts
+        with self.file.open(mode="rb+") as f:
+            f.seek(-4 * (len(block_starts) + 1), os.SEEK_END)
+            for data_block in _generate_data_blocks(schema, data):
+                block_starts.append(f.tell())
+                f.write(data_block)
+            for block_size in block_starts:
+                f.write(binarize_value(block_size))
+            print("Append, block numbers:", len(block_starts), self.file)
+            f.write(to_unsigned_int(len(block_starts)))
+        return self
+
+    def append_rows(self, data: list[Row]) -> Self:
         if not self.file.exists():
-            self.write_data_rows(data)
+            self.write_rows(data)
             return self
         schema = self.file_schema
         data_tuples = [tuple(row[col_name] for col_name, _ in schema) for row in data]
-        append(data_tuples, self.file)
-        return self
+        return self.append_data(data_tuples)
+
+    def read_data(self) -> Iterable[tuple[Any, ...]]:
+        schema = self.file_schema
+        block_starts = self.block_starts
+        with self.file.open("rb") as f:
+            for block_start in block_starts:
+                f.seek(block_start)
+                block_data = _deserialize_block(f, schema)
+                yield from zip(*block_data)
+
+    def read_data_rows(self) -> Iterable[Row]:
+        for block in self.read_blocks_sequentially():
+            yield from block
+
+    def read_block_data(self, block_start: int) -> list[tuple[Any, ...]]:
+        schema = self.file_schema
+        with self.file.open("rb") as f:
+            f.seek(block_start)
+            block_data = _deserialize_block(f, schema)
+            return list(zip(*block_data))
+
+    def read_block_rows(self, block_id: int) -> Iterable[Row]:
+        schema = self.file_schema
+        block_start = self.block_starts[block_id]
+        for row in self.read_block_data(block_start):
+            yield {
+                col_name: row[col_idx] for col_idx, (col_name, _) in enumerate(schema)
+            }
+
+    def read_blocks_sequentially(self) -> Iterable[list[Row]]:
+        schema = self.file_schema
+        block_starts = self.block_starts
+        for block_start in block_starts:
+            block_data = self.read_block_data(block_start)
+            row_data = [
+                {col_name: val for val, (col_name, _) in zip(row, schema)}
+                for row in block_data
+            ]
+            yield row_data
 
     def create_block_reader(
         self, block_start: int, row_buffer_size: int
@@ -267,7 +278,7 @@ class BlockFile:
                 f.seek(block_start)
                 block_rows = read_unsigned_int(f)
             column_readers = [
-                deserialize_block_column(
+                _deserialize_block_column(
                     f, col_name, schema, block_rows, chunk_size=row_buffer_size
                 )
                 for f, (col_name, _) in zip(file_handles, schema)
@@ -281,53 +292,8 @@ class BlockFile:
                     for row_tuple in zip(*row_tuple_chunk)
                 ]
 
-    @cached_property
-    def block_starts(self) -> list[int]:
-        with self.file.open("rb") as f:
-            return deserialize_block_starts(f)
-
-    @cached_property
-    def file_schema(self) -> Schema:
-        with self.file.open("rb") as f:
-            return deserialize_schema(f)
-
-    def read_blocks_sequentially(self) -> Iterable[list[Row]]:
-        schema = self.file_schema
-        block_starts = self.block_starts
-        with self.file.open("rb") as f:
-            for block_start in block_starts:
-                f.seek(block_start)
-                block_data = deserialize_block(f, schema)
-                row_data = [
-                    {
-                        col_name: block_data[col_idx][row_idx]
-                        for col_idx, (col_name, _) in enumerate(schema)
-                    }
-                    for row_idx in range(len(block_data[0]))
-                ]
-                yield row_data
-
-    def write_data_rows(self, data: list[Row]) -> Self:
-        first_row = data[0]
-        schema = [(key, ColumnType.of(value)) for key, value in first_row.items()]
-        tuple_data = [tuple(row[key] for key, _ in schema) for row in data]
-        return self.write_data(tuple_data, schema=schema)
-
-    def read_data_rows(self) -> Iterable[Row]:
-        for block in self.read_blocks_sequentially():
-            yield from block
-
-    def read_data(self) -> Iterable[tuple[Any, ...]]:
-        schema = self.file_schema
-        block_starts = self.block_starts
-        with self.file.open("rb") as f:
-            for block_start in block_starts:
-                f.seek(block_start)
-                block_data = deserialize_block(f, schema)
-                yield from zip(*block_data)
-
     def merge_files(self, files: list[Path]) -> Self:
         schema = BlockFile(files[0]).file_schema
         assert all(BlockFile(f).file_schema == schema for f in files)
         full_data_iterator = (row for f in files for row in BlockFile(f).read_data())
-        return self.write_data_with_known_schema(full_data_iterator, schema)
+        return self._write_data_with_known_schema(full_data_iterator, schema)

@@ -4,12 +4,7 @@ from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import Any, Iterable, Literal
 from collections import Counter, defaultdict
-from .io import (
-    deserialize_block_starts,
-    deserialize_block,
-    append_rows,
-    BlockFile,
-)
+from .io import BlockFile
 from .utils import create_temp_file, nice_schema
 from .sql import Col, BinaryOperatorColumn
 from .constants import Row, SHUFFLE_FOLDER, Schema, ColumnType
@@ -97,21 +92,11 @@ class LoadTableTask(Task):
     file_path: Path
 
     def execute(self, job: Job) -> Iterable[Row]:
-        block_start = self.block_starts[job.block_id]
-        with self.file_path.open(mode="rb") as f:
-            f.seek(block_start)
-            block_data = deserialize_block(f, self.file_schema)
-            for row in zip(*block_data):
-                yield {name: val for val, (name, _) in zip(row, self.file_schema)}
+        yield from BlockFile(self.file_path).read_block_rows(job.block_id)
 
     @cached_property
     def file_schema(self) -> Schema:
         return BlockFile(self.file_path).file_schema
-
-    @cached_property
-    def block_starts(self) -> list[int]:
-        with self.file_path.open(mode="rb") as f:
-            return deserialize_block_starts(f)
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -120,7 +105,7 @@ class LoadTableTask(Task):
 
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
         yield from self.parent_task.create_jobs(full_task, worker_count)
-        for block_id in range(len(self.block_starts)):
+        for block_id in range(len(BlockFile(self.file_path).block_starts)):
             yield Job(full_task, block_id)
 
     def explain(self, lvl: int = 0):
@@ -137,16 +122,7 @@ class LoadShuffleFileTask(Task):
 
     def execute(self, job: Job) -> Iterable[Row]:
         assert job.shuffle_file is not None
-        block_start = self.block_starts(job.shuffle_file)[job.block_id]
-        schema = self.load_schema(job.shuffle_file)
-        with job.shuffle_file.open(mode="rb") as f:
-            f.seek(block_start)
-            block_data = deserialize_block(f, schema)
-            for row in zip(*block_data):
-                yield {name: val for val, (name, _) in zip(row, schema)}
-
-    def load_schema(self, shuffle_file: Path) -> Schema:
-        return BlockFile(shuffle_file).file_schema
+        yield from BlockFile(job.shuffle_file).read_block_rows(job.block_id)
 
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
         assert self.stage_to_load != -1
@@ -158,7 +134,7 @@ class LoadShuffleFileTask(Task):
                 )
                 if not shuffle_file.exists():
                     continue
-                for block_id in range(len(self.block_starts(shuffle_file))):
+                for block_id in range(len(BlockFile(shuffle_file).block_starts)):
                     yield Job(
                         full_task,
                         block_id,
@@ -166,10 +142,6 @@ class LoadShuffleFileTask(Task):
                         shuffle_file=shuffle_file,
                     )
         yield from []
-
-    def block_starts(self, shuffle_file: Path) -> list[int]:
-        with shuffle_file.open(mode="rb") as f:
-            return deserialize_block_starts(f)
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
@@ -384,7 +356,7 @@ class ShuffleToFileTask(Task):
                 / f"{job.current_stage}_{job.worker_id}_{shuffle_bucket}.bin"
             )
             print("writing", shuffle_file.absolute())
-            append_rows(rows, shuffle_file)
+            BlockFile(shuffle_file).append_rows(rows)
         return []
 
     def explain(self, lvl: int = 0):
