@@ -2,7 +2,6 @@ from typing import Iterable
 from copy import deepcopy
 from pathlib import Path
 from multiprocessing import Pool, Queue
-from collections import defaultdict
 from .tasks import (
     Job,
     LoadShuffleFileTask,
@@ -45,60 +44,28 @@ class Executor:
                 jobs = list(stage.create_jobs(stage, self.worker_count))
                 for job in jobs:
                     job.current_stage = i
-                    if job.shuffle_file is not None:
-                        shuffle_files_to_delete.add(job.shuffle_file)
-                grouped_jobs = self.group_jobs_by_worker(jobs)
-                print("Jobs:", len(jobs), "job groups: ", len(grouped_jobs))
+                    shuffle_files_to_delete.update(job.files_to_delete)
+                print("Jobs:", len(jobs))
                 print("Physical plan created")
                 if USE_WORKERS:
                     for job_result in worker_pool.imap_unordered(
-                        self.execute_job_group_on_worker, grouped_jobs
+                        self.execute_job_group_on_worker, jobs
                     ):
                         yield from convert_columns_to_rows(
                             job_result, stage.inferred_schema
                         )
                 else:
-                    for job_result in map(
-                        self.execute_job_group_on_worker, grouped_jobs
-                    ):
+                    for job_result in map(self.execute_job_group_on_worker, jobs):
                         yield from convert_columns_to_rows(
                             job_result, stage.inferred_schema
                         )
             for shuffle_file in shuffle_files_to_delete:
                 shuffle_file.unlink(missing_ok=True)
 
-    def group_jobs_by_worker(self, jobs: list[Job]) -> list[list[Job]]:
-        assert all(job.task == jobs[0].task for job in jobs)
-        worker_list = defaultdict(list)
-        for job in jobs:
-            worker_list[job.worker_id].append(job)
-        # the driver needs different copies of the task because it keeps a context
-        for jobs in worker_list.values():
-            same_task = deepcopy(jobs[0].task)
-            for job in jobs:
-                job.task = same_task
-        single_worker_jobs = worker_list[-1]
-        del worker_list[-1]
-        return [list(job_list) for job_list in worker_list.values()] + [
-            [job] for job in single_worker_jobs
-        ]
-
-    def execute_job_group_on_worker(self, jobs: list[Job]) -> Columns:
-        final_result: Columns = ()
-        for job in jobs:
-            if USE_WORKERS:
-                if job.worker_id == -1:
-                    job.worker_id = worker_id
-                job.worker_count = self.worker_count
-            else:
-                if job.worker_id == -1:
-                    job.worker_id = 0
-                job.worker_count = 2
-            assert job.worker_id <= self.worker_count
-            # print("Job started", job.task.__class__.__name__, job.worker_id)
-            final_result = job.execute()
-            # print("Job finished", job.task.__class__.__name__, job.worker_id)
-        return final_result
+    def execute_job_group_on_worker(self, job: Job) -> Columns:
+        job.worker_id = worker_id
+        assert job.worker_id <= self.worker_count
+        return job.execute()
 
     def split_into_stages(self, root_task: Task) -> Iterable[Task]:
         curr_task = root_task

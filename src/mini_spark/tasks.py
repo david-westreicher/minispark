@@ -7,23 +7,49 @@ from collections import Counter
 from .io import BlockFile
 from .utils import create_temp_file, nice_schema, convert_rows_to_columns
 from .sql import Col, BinaryOperatorColumn
-from .constants import Row, SHUFFLE_FOLDER, Schema, ColumnType, Columns
+from .constants import (
+    Row,
+    SHUFFLE_FOLDER,
+    Schema,
+    ColumnType,
+    Columns,
+    SHUFFLE_PARTITIONS,
+)
 from .algorithms import SORT_BLOCK_SIZE, external_sort, external_merge_join
 
 JoinType = Literal["inner", "left", "right", "outer"]
 
 
+# TODO: use strategy pattern for jobs
 @dataclass
 class Job:
     task: "Task"
-    block_id: int
-    worker_count: int = -1
+    table_block_to_load: tuple[Path, int] | None = None
+    shuffle_files_to_load: list[Path] | None = None
+    join_files_to_load: tuple[list[Path], list[Path]] | None = None
     worker_id: int = -1
     current_stage: int = -1
-    shuffle_file: Path | None = None
+
+    @property
+    def files_to_delete(self) -> Iterable[Path]:
+        if self.shuffle_files_to_load:
+            yield from self.shuffle_files_to_load
+        if self.join_files_to_load:
+            yield from self.join_files_to_load[0]
+            yield from self.join_files_to_load[1]
 
     def execute(self) -> Columns:
-        return self.task.execute(self)
+        if self.shuffle_files_to_load is None:
+            return self.task.execute(self)
+
+        last_execution: Columns = ()
+        for shuffle_file in self.shuffle_files_to_load:
+            if not shuffle_file.exists():
+                continue
+            for block_id in range(len(BlockFile(shuffle_file).block_starts)):
+                self.table_block_to_load = (shuffle_file, block_id)
+                last_execution = self.task.execute(self)
+        return last_execution
 
 
 @dataclass
@@ -102,7 +128,9 @@ class LoadTableTask(Task):
     file_path: Path
 
     def execute(self, job: Job) -> Columns:
-        return BlockFile(self.file_path).read_block_data_columns_by_id(job.block_id)
+        assert job.table_block_to_load is not None
+        table_file, block_id = job.table_block_to_load
+        return BlockFile(table_file).read_block_data_columns_by_id(block_id)
 
     @cached_property
     def file_schema(self) -> Schema:
@@ -116,7 +144,7 @@ class LoadTableTask(Task):
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
         yield from self.parent_task.create_jobs(full_task, worker_count)
         for block_id in range(len(BlockFile(self.file_path).block_starts)):
-            yield Job(full_task, block_id)
+            yield Job(full_task, table_block_to_load=(self.file_path, block_id))
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
@@ -131,27 +159,22 @@ class LoadShuffleFileTask(Task):
     stage_to_load: int = -1
 
     def execute(self, job: Job) -> Columns:
-        assert job.shuffle_file is not None
-        return BlockFile(job.shuffle_file).read_block_data_columns_by_id(job.block_id)
+        assert job.table_block_to_load is not None
+        table_file, block_id = job.table_block_to_load
+        return BlockFile(table_file).read_block_data_columns_by_id(block_id)
 
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
-        assert self.stage_to_load != -1
-        for worker_from in range(worker_count):
-            for worker_to in range(worker_count):
-                shuffle_file = (
-                    SHUFFLE_FOLDER
-                    / f"{self.stage_to_load}_{worker_from}_{worker_to}.bin"
-                )
-                if not shuffle_file.exists():
-                    continue
-                for block_id in range(len(BlockFile(shuffle_file).block_starts)):
-                    yield Job(
-                        full_task,
-                        block_id,
-                        worker_id=worker_to,
-                        shuffle_file=shuffle_file,
+        for partition in range(SHUFFLE_PARTITIONS):
+            yield Job(
+                full_task,
+                shuffle_files_to_load=[
+                    (
+                        SHUFFLE_FOLDER
+                        / f"{self.stage_to_load}_{worker_from}_{partition}.bin"
                     )
-        yield from []
+                    for worker_from in range(worker_count)
+                ],
+            )
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
@@ -211,12 +234,10 @@ class JoinTask(Task):
     def execute(self, job: Job) -> Columns:
         assert self.left_key
         assert self.right_key
-        left_sorted_file = self.sort_shuffle_files(
-            self.left_shuffle_stage, self.left_key, job
-        )
-        right_sorted_file = self.sort_shuffle_files(
-            self.right_shuffle_stage, self.right_key, job
-        )
+        assert job.join_files_to_load
+        left_shuffle_files, right_shuffle_files = job.join_files_to_load
+        left_sorted_file = self.sort_shuffle_files(left_shuffle_files, self.left_key)
+        right_sorted_file = self.sort_shuffle_files(right_shuffle_files, self.right_key)
         joined_rows: list[Row] = []
         if left_sorted_file and right_sorted_file:
             # TODO: does not hold for all join types
@@ -236,11 +257,8 @@ class JoinTask(Task):
         assert self.inferred_schema
         return convert_rows_to_columns(joined_rows, self.inferred_schema)
 
-    def sort_shuffle_files(self, stage: int, key: Col, job: Job) -> Path | None:
-        shuffle_files = list(
-            self.collect_shuffle_files(stage, job.worker_id, job.worker_count)
-        )
-        if shuffle_files == []:
+    def sort_shuffle_files(self, shuffle_files: list[Path], key: Col) -> Path | None:
+        if not shuffle_files:
             return None
         shuffle_file = (
             BlockFile(create_temp_file(), SORT_BLOCK_SIZE)
@@ -253,15 +271,6 @@ class JoinTask(Task):
         shuffle_file.unlink(missing_ok=True)
         tmp_file.unlink(missing_ok=True)
         return output_file
-
-    def collect_shuffle_files(
-        self, stage: int, worker_id: int, worker_count: int
-    ) -> Iterable[Path]:
-        for worker_from in range(worker_count):
-            shuffle_file = SHUFFLE_FOLDER / f"{stage}_{worker_from}_{worker_id}.bin"
-            if not shuffle_file.exists():
-                continue
-            yield shuffle_file
 
     def validate_schema(self) -> Schema:
         left_schema = self.parent_task.validate_schema()
@@ -290,9 +299,32 @@ class JoinTask(Task):
         return left_schema + right_schema
 
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
-        yield from self.parent_task.create_jobs(full_task, worker_count)
-        for i in range(worker_count):
-            yield Job(full_task, block_id=-1, worker_id=i, worker_count=worker_count)
+        assert not list(self.parent_task.create_jobs(full_task, worker_count))
+        for partition in range(SHUFFLE_PARTITIONS):
+            yield Job(
+                full_task,
+                join_files_to_load=(
+                    list(
+                        self.collect_shuffle_files(
+                            self.left_shuffle_stage, worker_count, partition
+                        )
+                    ),
+                    list(
+                        self.collect_shuffle_files(
+                            self.right_shuffle_stage, worker_count, partition
+                        )
+                    ),
+                ),
+            )
+
+    def collect_shuffle_files(
+        self, stage: int, worker_count: int, partition: int
+    ) -> Iterable[Path]:
+        for worker_from in range(worker_count):
+            shuffle_file = SHUFFLE_FOLDER / f"{stage}_{worker_from}_{partition}.bin"
+            if not shuffle_file.exists():
+                continue
+            yield shuffle_file
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
@@ -343,23 +375,22 @@ class ShuffleToFileTask(Task):
             self.key_column, input_columns, self.parent_task.inferred_schema
         )
         final_output: tuple[list[list[Any]], ...] = tuple(
-            [] for _ in range(job.worker_count)
+            [] for _ in range(SHUFFLE_PARTITIONS)
         )
         for col in input_columns:
             col_buckets: tuple[list[Any], ...] = tuple(
-                [] for _ in range(job.worker_count)
+                [] for _ in range(SHUFFLE_PARTITIONS)
             )
             for val, key in zip(col, key_column):
-                destination = hash(key) % job.worker_count
+                destination = hash(key) % SHUFFLE_PARTITIONS
                 col_buckets[destination].append(val)
             for shuffle, col_bucket in zip(final_output, col_buckets):
                 shuffle.append(col_bucket)
-        for shuffle_bucket, full_data in enumerate(final_output):
+        for partition, full_data in enumerate(final_output):
             if len(full_data[0]) == 0:
                 continue
             shuffle_file = Path(
-                SHUFFLE_FOLDER
-                / f"{job.current_stage}_{job.worker_id}_{shuffle_bucket}.bin"
+                SHUFFLE_FOLDER / f"{job.current_stage}_{job.worker_id}_{partition}.bin"
             )
             print("writing", shuffle_file.absolute())
             data_in_rows = list(zip(*full_data))

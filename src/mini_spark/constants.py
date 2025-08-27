@@ -31,6 +31,7 @@ class ColumnType(Enum):
 USE_WORKERS = False
 SHUFFLE_FOLDER = Path("shuffle/")
 BLOCK_SIZE = 10 * 1024 * 1024  # 10 MB
+SHUFFLE_PARTITIONS = 10
 Row = dict[str, Any]
 Columns = tuple[list[Any], ...]
 Schema = list[tuple[str, ColumnType]]
