@@ -24,32 +24,52 @@ JoinType = Literal["inner", "left", "right", "outer"]
 @dataclass
 class Job:
     task: "Task"
-    table_block_to_load: tuple[Path, int] | None = None
-    shuffle_files_to_load: list[Path] | None = None
-    join_files_to_load: tuple[list[Path], list[Path]] | None = None
     worker_id: int = -1
     current_stage: int = -1
 
     @property
     def files_to_delete(self) -> Iterable[Path]:
-        if self.shuffle_files_to_load:
-            yield from self.shuffle_files_to_load
-        if self.join_files_to_load:
-            yield from self.join_files_to_load[0]
-            yield from self.join_files_to_load[1]
+        yield from []
 
     def execute(self) -> Columns:
-        if self.shuffle_files_to_load is None:
-            return self.task.execute(self)
+        return self.task.execute(self)
 
+
+@dataclass(kw_only=True)
+class LoadTableBlockJob(Job):
+    table_file: Path
+    block_id: int
+
+
+@dataclass(kw_only=True)
+class LoadShuffleFilesJob(Job):
+    shuffle_files: list[Path]
+    shuffle_block_to_load: tuple[Path, int] | None = None
+
+    def execute(self) -> Columns:
         last_execution: Columns = ()
-        for shuffle_file in self.shuffle_files_to_load:
+        for shuffle_file in self.shuffle_files:
             if not shuffle_file.exists():
                 continue
             for block_id in range(len(BlockFile(shuffle_file).block_starts)):
-                self.table_block_to_load = (shuffle_file, block_id)
+                self.shuffle_block_to_load = (shuffle_file, block_id)
                 last_execution = self.task.execute(self)
         return last_execution
+
+    @property
+    def files_to_delete(self) -> Iterable[Path]:
+        yield from self.shuffle_files
+
+
+@dataclass(kw_only=True)
+class LoadJoinFilesJob(Job):
+    left_shuffle_files: list[Path]
+    right_shuffle_files: list[Path]
+
+    @property
+    def files_to_delete(self) -> Iterable[Path]:
+        yield from self.left_shuffle_files
+        yield from self.right_shuffle_files
 
 
 @dataclass
@@ -128,9 +148,8 @@ class LoadTableTask(Task):
     file_path: Path
 
     def execute(self, job: Job) -> Columns:
-        assert job.table_block_to_load is not None
-        table_file, block_id = job.table_block_to_load
-        return BlockFile(table_file).read_block_data_columns_by_id(block_id)
+        assert type(job) is LoadTableBlockJob
+        return BlockFile(job.table_file).read_block_data_columns_by_id(job.block_id)
 
     @cached_property
     def file_schema(self) -> Schema:
@@ -144,7 +163,9 @@ class LoadTableTask(Task):
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
         yield from self.parent_task.create_jobs(full_task, worker_count)
         for block_id in range(len(BlockFile(self.file_path).block_starts)):
-            yield Job(full_task, table_block_to_load=(self.file_path, block_id))
+            yield LoadTableBlockJob(
+                full_task, table_file=self.file_path, block_id=block_id
+            )
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
@@ -159,15 +180,16 @@ class LoadShuffleFileTask(Task):
     stage_to_load: int = -1
 
     def execute(self, job: Job) -> Columns:
-        assert job.table_block_to_load is not None
-        table_file, block_id = job.table_block_to_load
+        assert type(job) is LoadShuffleFilesJob
+        assert job.shuffle_block_to_load is not None
+        table_file, block_id = job.shuffle_block_to_load
         return BlockFile(table_file).read_block_data_columns_by_id(block_id)
 
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
         for partition in range(SHUFFLE_PARTITIONS):
-            yield Job(
+            yield LoadShuffleFilesJob(
                 full_task,
-                shuffle_files_to_load=[
+                shuffle_files=[
                     (
                         SHUFFLE_FOLDER
                         / f"{self.stage_to_load}_{worker_from}_{partition}.bin"
@@ -234,10 +256,13 @@ class JoinTask(Task):
     def execute(self, job: Job) -> Columns:
         assert self.left_key
         assert self.right_key
-        assert job.join_files_to_load
-        left_shuffle_files, right_shuffle_files = job.join_files_to_load
-        left_sorted_file = self.sort_shuffle_files(left_shuffle_files, self.left_key)
-        right_sorted_file = self.sort_shuffle_files(right_shuffle_files, self.right_key)
+        assert type(job) is LoadJoinFilesJob
+        left_sorted_file = self.sort_shuffle_files(
+            job.left_shuffle_files, self.left_key
+        )
+        right_sorted_file = self.sort_shuffle_files(
+            job.right_shuffle_files, self.right_key
+        )
         joined_rows: list[Row] = []
         if left_sorted_file and right_sorted_file:
             # TODO: does not hold for all join types
@@ -301,19 +326,17 @@ class JoinTask(Task):
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
         assert not list(self.parent_task.create_jobs(full_task, worker_count))
         for partition in range(SHUFFLE_PARTITIONS):
-            yield Job(
+            yield LoadJoinFilesJob(
                 full_task,
-                join_files_to_load=(
-                    list(
-                        self.collect_shuffle_files(
-                            self.left_shuffle_stage, worker_count, partition
-                        )
-                    ),
-                    list(
-                        self.collect_shuffle_files(
-                            self.right_shuffle_stage, worker_count, partition
-                        )
-                    ),
+                left_shuffle_files=list(
+                    self.collect_shuffle_files(
+                        self.left_shuffle_stage, worker_count, partition
+                    )
+                ),
+                right_shuffle_files=list(
+                    self.collect_shuffle_files(
+                        self.right_shuffle_stage, worker_count, partition
+                    )
                 ),
             )
 
