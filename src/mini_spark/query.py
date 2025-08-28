@@ -1,7 +1,6 @@
 from typing import Iterable
 from copy import deepcopy
 from pathlib import Path
-from multiprocessing import Pool, Queue
 from .tasks import (
     Job,
     LoadShuffleFileTask,
@@ -10,62 +9,64 @@ from .tasks import (
     VoidTask,
     ShuffleToFileTask,
 )
-from .constants import Columns, Row, USE_WORKERS
-from .utils import convert_columns_to_rows
-
-worker_id = 0
-id_queue: "Queue[int]" = Queue()
-
-
-def init_worker():
-    global worker_id
-    worker_id = id_queue.get()
+from .constants import Columns, Row
+from .utils import (
+    convert_columns_to_rows,
+    TRACER,
+    trace,
+)
+from . import utils
 
 
 class Executor:
     def __init__(self, task: Task, worker_count: int = 10):
         self.task = task
         self.worker_count = worker_count
+        self.shuffle_files_to_delete: set[Path] = set()
 
     def execute(self) -> Iterable[Row]:
-        for worker_id in range(self.worker_count):
-            id_queue.put(worker_id)
         Analyzer.analyze(self.task)
         stages = list(reversed(list(self.split_into_stages(self.task))))
         for stage_num, stage in enumerate(stages):
             Analyzer.optimize(stage, stage_num)
-        shuffle_files_to_delete: set[Path] = set()
-        with Pool(processes=self.worker_count, initializer=init_worker) as worker_pool:
-            for i, stage in enumerate(stages):
-                print("#" * 100)
-                print("Stage", i)
-                assert stage.inferred_schema is not None
-                stage.explain()
-                jobs = list(stage.create_jobs(stage, self.worker_count))
-                for job in jobs:
-                    job.current_stage = i
-                    shuffle_files_to_delete.update(job.files_to_delete)
-                print("Jobs:", len(jobs))
-                print("Physical plan created")
-                if USE_WORKERS:
-                    for job_result in worker_pool.imap_unordered(
-                        self.execute_job_group_on_worker, jobs
-                    ):
-                        yield from convert_columns_to_rows(
-                            job_result, stage.inferred_schema
-                        )
-                else:
-                    for job_result in map(self.execute_job_group_on_worker, jobs):
-                        yield from convert_columns_to_rows(
-                            job_result, stage.inferred_schema
-                        )
-            for shuffle_file in shuffle_files_to_delete:
-                shuffle_file.unlink(missing_ok=True)
+        TRACER.start("Execution")
+        for i, stage in enumerate(stages):
+            print("#" * 100)
+            print("Stage", i)
+            TRACER.start(f"Stage {i}")
+            yield from self.execute_stage(stage, i)
+            TRACER.end()
+        TRACER.end()
+
+        TRACER.start("remove files")
+        for shuffle_file in self.shuffle_files_to_delete:
+            shuffle_file.unlink(missing_ok=True)
+        self.shuffle_files_to_delete.clear()
+        TRACER.end()
+
+    def execute_stage(self, stage, stage_num: int) -> Iterable[Row]:
+        assert stage.inferred_schema is not None
+        stage.explain()
+        TRACER.start("Create jobs")
+        jobs = list(stage.create_jobs(stage, self.worker_count))
+        for job in jobs:
+            job.current_stage = stage_num
+            self.shuffle_files_to_delete.update(job.files_to_delete)
+        TRACER.end()
+        print("Jobs:", len(jobs))
+        print("Physical plan created")
+        for job_i, job_result in enumerate(map(self.execute_job_group_on_worker, jobs)):
+            TRACER.start(f"Process job {job_i}")
+            yield from convert_columns_to_rows(job_result, stage.inferred_schema)
+            TRACER.end()
 
     def execute_job_group_on_worker(self, job: Job) -> Columns:
-        job.worker_id = worker_id
+        job.worker_id = 0
         assert job.worker_id <= self.worker_count
-        return job.execute()
+        utils.TRACER.start("job")
+        result = job.execute()
+        utils.TRACER.end()
+        return result
 
     def split_into_stages(self, root_task: Task) -> Iterable[Task]:
         curr_task = root_task
@@ -92,6 +93,7 @@ class Executor:
 
 class Analyzer:
     @staticmethod
+    @trace("analyze")
     def analyze(task: Task):
         if type(task) is VoidTask:
             return
@@ -101,6 +103,7 @@ class Analyzer:
         Analyzer.analyze(task.parent_task)
 
     @staticmethod
+    @trace("optimize")
     def optimize(task: Task, stage_num: int) -> None:
         if type(task) is LoadShuffleFileTask:
             task.stage_to_load = stage_num - 1

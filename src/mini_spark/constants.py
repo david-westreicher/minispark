@@ -28,7 +28,7 @@ class ColumnType(Enum):
             return ColumnType.UNKNOWN
 
 
-USE_WORKERS = False
+GLOBAL_TEMP_FOLDER = Path("tmp/")
 SHUFFLE_FOLDER = Path("shuffle/")
 BLOCK_SIZE = 10 * 1024 * 1024  # 10 MB
 SHUFFLE_PARTITIONS = 10

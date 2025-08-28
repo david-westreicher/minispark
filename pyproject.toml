@@ -9,3 +9,15 @@ authors = [{ name = "David Westreicher" }]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src", "tests"]
+
+# Default: be strict
+ignore_missing_imports = false
+
+# But relax just for perfetto.*
+[[tool.mypy.overrides]]
+module = "perfetto.*"
+ignore_missing_imports = true

@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Iterable, Literal
 from collections import Counter
 from .io import BlockFile
-from .utils import create_temp_file, nice_schema, convert_rows_to_columns
+from .utils import create_temp_file, nice_schema, convert_rows_to_columns, trace
 from .sql import Col, BinaryOperatorColumn
 from .constants import (
     Row,
@@ -32,7 +32,16 @@ class Job:
         yield from []
 
     def execute(self) -> Columns:
-        return self.task.execute(self)
+        out = ()
+        for task in self.create_task_chain(self.task):
+            out = task.execute(out, self)
+        return out
+
+    def create_task_chain(self, root: "Task"):
+        if type(root) is VoidTask:
+            return
+        yield from self.create_task_chain(root.parent_task)
+        yield root
 
 
 @dataclass(kw_only=True)
@@ -53,7 +62,7 @@ class LoadShuffleFilesJob(Job):
                 continue
             for block_id in range(len(BlockFile(shuffle_file).block_starts)):
                 self.shuffle_block_to_load = (shuffle_file, block_id)
-                last_execution = self.task.execute(self)
+                last_execution = super().execute()
         return last_execution
 
     @property
@@ -72,13 +81,19 @@ class LoadJoinFilesJob(Job):
         yield from self.right_shuffle_files
 
 
+@trace("project_col")
+def project_column(col: Col, input_columns: Columns, schema: Schema) -> list[Any]:
+    col = col.schema_executor(schema)
+    return [col.execute_row(row) for row in zip(*input_columns)]
+
+
 @dataclass
 class Task(ABC):
     parent_task: "Task"
     inferred_schema: Schema | None = None
 
     @abstractmethod
-    def execute(self, job: Job) -> Columns: ...
+    def execute(self, input_columns: Columns, job: Job) -> Columns: ...
 
     @abstractmethod
     def explain(self, lvl: int = 0) -> None: ...
@@ -86,22 +101,17 @@ class Task(ABC):
     def validate_schema(self) -> Schema:
         return self.parent_task.validate_schema()
 
+    @trace("create_jobs")
     def create_jobs(self, full_task: "Task", worker_count: int) -> Iterable[Job]:
         yield from self.parent_task.create_jobs(full_task, worker_count)
-
-
-def project_column(col: Col, input_columns: Columns, schema: Schema) -> list[Any]:
-    col = col.schema_executor(schema)
-    return [col.execute_row(row) for row in zip(*input_columns)]
 
 
 @dataclass(kw_only=True)
 class ProjectTask(Task):
     columns: list[Col]
 
-    def execute(self, job: Job) -> Columns:
-        input_columns = self.parent_task.execute(job)
-
+    @trace("ProjectTask")
+    def execute(self, input_columns: Columns, job: Job) -> Columns:
         assert self.parent_task.inferred_schema is not None
         return tuple(
             project_column(col, input_columns, self.parent_task.inferred_schema)
@@ -147,7 +157,8 @@ class ProjectTask(Task):
 class LoadTableTask(Task):
     file_path: Path
 
-    def execute(self, job: Job) -> Columns:
+    @trace("LoadTableTask")
+    def execute(self, input_columns: Columns, job: Job) -> Columns:
         assert type(job) is LoadTableBlockJob
         return BlockFile(job.table_file).read_block_data_columns_by_id(job.block_id)
 
@@ -179,7 +190,8 @@ class LoadTableTask(Task):
 class LoadShuffleFileTask(Task):
     stage_to_load: int = -1
 
-    def execute(self, job: Job) -> Columns:
+    @trace("LoadShuffleFileTask")
+    def execute(self, input_columns: Columns, job: Job) -> Columns:
         assert type(job) is LoadShuffleFilesJob
         assert job.shuffle_block_to_load is not None
         table_file, block_id = job.shuffle_block_to_load
@@ -213,8 +225,8 @@ class FilterTask(Task):
     def __post_init__(self):
         assert type(self.condition) is BinaryOperatorColumn
 
-    def execute(self, job: Job) -> Columns:
-        input_columns = self.parent_task.execute(job)
+    @trace("FilterTask")
+    def execute(self, input_columns: Columns, job: Job) -> Columns:
         assert self.parent_task.inferred_schema is not None
         condition_col = project_column(
             self.condition, input_columns, self.parent_task.inferred_schema
@@ -253,7 +265,8 @@ class JoinTask(Task):
     left_key: Col | None = None
     right_key: Col | None = None
 
-    def execute(self, job: Job) -> Columns:
+    @trace("JoinTask")
+    def execute(self, input_columns: Columns, job: Job) -> Columns:
         assert self.left_key
         assert self.right_key
         assert type(job) is LoadJoinFilesJob
@@ -282,6 +295,7 @@ class JoinTask(Task):
         assert self.inferred_schema
         return convert_rows_to_columns(joined_rows, self.inferred_schema)
 
+    @trace("Sort shuffle file")
     def sort_shuffle_files(self, shuffle_files: list[Path], key: Col) -> Path | None:
         if not shuffle_files:
             return None
@@ -363,8 +377,8 @@ class CountTask(Task):
     group_by_column: Col
     counter: dict[Any, int] = field(default_factory=lambda: Counter())
 
-    def execute(self, job: Job) -> Columns:
-        input_columns = self.parent_task.execute(job)
+    @trace("CountTask")
+    def execute(self, input_columns: Columns, job: Job) -> Columns:
         assert self.parent_task.inferred_schema is not None
         group_column = project_column(
             self.group_by_column, input_columns, self.parent_task.inferred_schema
@@ -390,9 +404,9 @@ class CountTask(Task):
 class ShuffleToFileTask(Task):
     key_column: Col | None = None
 
-    def execute(self, job: Job) -> Columns:
+    @trace("ShuffleToFileTask")
+    def execute(self, input_columns: Columns, job: Job) -> Columns:
         assert self.key_column is not None
-        input_columns = self.parent_task.execute(job)
         assert self.parent_task.inferred_schema is not None
         key_column = project_column(
             self.key_column, input_columns, self.parent_task.inferred_schema
@@ -437,7 +451,7 @@ class ShuffleToFileTask(Task):
             raise Exception(f"Unknown columns in GroupBy: {unknown_cols}")
         return [
             (self.key_column.name, self.key_column.infer_type(schema)),
-        ]
+        ] + schema
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
@@ -451,7 +465,7 @@ class ShuffleToFileTask(Task):
 class VoidTask(Task):
     parent_task: Task = None  # type: ignore
 
-    def execute(self, job: Job) -> Columns:
+    def execute(self, input_columns: Columns, job: Job) -> Columns:
         raise NotImplementedError()
 
     def explain(self, lvl: int = 0):
