@@ -40,16 +40,14 @@ class DataFrame:
     def collect(self) -> list[Row]:
         return list(Executor(self.task).execute())
 
-    def show(self, n=20) -> None:
+    def show(self, n=5) -> None:
         first = True
-        for row in Executor(self.task).execute():
+        for row in Executor(self.task).execute(limit=n):
             if first:
-                print("\t".join(row.keys()))
+                print("|" + ("|".join(f"{col:<10}" for col in row.keys())) + "|")
+                print("|" + ("+".join("-" * 10 for _ in row.keys())) + "|")
                 first = False
-            print("\t".join(str(v) for v in row.values()))
-            n -= 1
-            if n == 0:
-                break
+            print("|" + ("|".join(f"{v:<10}" for v in row.values())) + "|")
 
     @property
     def schema(self) -> Schema:

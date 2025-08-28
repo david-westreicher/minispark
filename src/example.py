@@ -19,11 +19,11 @@ colors = (
     .table("fruit_color.bin")
     .select(Col("id").alias("color_id"), Col("color"))
 )
-# colors.show()
+colors.show()
 counts = (
     DataFrame()
     .table("fruit_count.bin")
     .select(Col("id").alias("count_id"), Col("count"))
 )
-# counts.show()
+counts.show()
 colors.join(counts, on=Col("color_id") == Col("count_id"), how="inner").show()

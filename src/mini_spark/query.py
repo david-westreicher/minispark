@@ -24,7 +24,7 @@ class Executor:
         self.worker_count = worker_count
         self.shuffle_files_to_delete: set[Path] = set()
 
-    def execute(self) -> Iterable[Row]:
+    def execute(self, limit=-1) -> Iterable[Row]:
         Analyzer.analyze(self.task)
         stages = list(reversed(list(self.split_into_stages(self.task))))
         for stage_num, stage in enumerate(stages):
@@ -34,7 +34,12 @@ class Executor:
             print("#" * 100)
             print("Stage", i)
             TRACER.start(f"Stage {i}")
-            yield from self.execute_stage(stage, i)
+            for row in self.execute_stage(stage, i):
+                if limit == 0:
+                    TRACER.end()
+                    break
+                yield row
+                limit -= 1
             TRACER.end()
         TRACER.end()
 
