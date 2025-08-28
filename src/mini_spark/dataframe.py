@@ -1,20 +1,21 @@
 from pathlib import Path
 from typing import Self
+
+from .constants import Row, Schema
+from .query import Executor
 from .sql import BinaryOperatorColumn, Col
 from .tasks import (
-    Task,
-    VoidTask,
+    CountTask,
+    FilterTask,
+    JoinTask,
+    JoinType,
+    LoadShuffleFileTask,
     LoadTableTask,
     ProjectTask,
-    FilterTask,
     ShuffleToFileTask,
-    LoadShuffleFileTask,
-    JoinType,
-    JoinTask,
-    CountTask,
+    Task,
+    VoidTask,
 )
-from .query import Executor
-from .constants import Row, Schema
 
 
 class GroupedData:

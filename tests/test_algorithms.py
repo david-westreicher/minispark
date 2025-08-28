@@ -1,21 +1,23 @@
+import random
+from pathlib import Path
+from random import shuffle
+from typing import Any, Callable
+from unittest.mock import Mock, call
+
+import pytest
+
 from mini_spark.algorithms import (
     SORT_BLOCK_SIZE,
     external_merge_join,
     external_sort,
     kway_merge,
 )
-from mini_spark.io import BlockFile
 from mini_spark.constants import Row
-from pathlib import Path
-from typing import Any, Callable
-from unittest.mock import Mock, call
-from random import shuffle
-import random
-import pytest
+from mini_spark.io import BlockFile
 
 
 @pytest.mark.parametrize(
-    "key_function", [lambda row: row["int_col"], lambda row: row["str_col"]]
+    "key_function", [lambda row: row["int_col"], lambda row: row["str_col"]],
 )
 def test_external_sort(tmp_path: Path, key_function: Callable[[Row], Any]):
     # arrange
@@ -41,7 +43,7 @@ def test_external_sort(tmp_path: Path, key_function: Callable[[Row], Any]):
 def test_kway_merge_action_trigger_1():
     # arrange
     test_data = [[9, 2, 5, 8], [2, 6, 8, 2, 1], [0, -2, 4]]
-    iterators = [iter(list(sorted(data))) for data in test_data]
+    iterators = [iter(sorted(data)) for data in test_data]
     result_action = Mock()
 
     # act
@@ -68,7 +70,7 @@ def test_kway_merge_action_trigger_1():
 def test_kway_merge_action_trigger_5():
     # arrange
     test_data = [[9, 2, 5, 8], [2, 6, 8, 2, 1], [0, -2, 4]]
-    iterators = [iter(list(sorted(data))) for data in test_data]
+    iterators = [iter(sorted(data)) for data in test_data]
     result_action = Mock()
 
     # act
@@ -91,7 +93,7 @@ def test_kway_merge_uncomparable():
 
     # act
     kway_merge(
-        iterators, key=lambda x: x[0], action=result_action, action_trigger_size=2
+        iterators, key=lambda x: x[0], action=result_action, action_trigger_size=2,
     )
 
     # assert

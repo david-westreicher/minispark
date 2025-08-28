@@ -1,7 +1,9 @@
 from pathlib import Path
-from mini_spark.dataframe import DataFrame, Col
-from mini_spark.io import BlockFile
+
 import pytest
+
+from mini_spark.dataframe import Col, DataFrame
+from mini_spark.io import BlockFile
 
 
 @pytest.fixture

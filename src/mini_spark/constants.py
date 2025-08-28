@@ -1,6 +1,6 @@
-from typing import Any
-from pathlib import Path
 from enum import Enum
+from pathlib import Path
+from typing import Any
 
 
 class ColumnType(Enum):
@@ -22,10 +22,9 @@ class ColumnType(Enum):
     def of(value: Any):
         if type(value) is int:
             return ColumnType.INTEGER
-        elif type(value) is str:
+        if type(value) is str:
             return ColumnType.STRING
-        else:
-            return ColumnType.UNKNOWN
+        return ColumnType.UNKNOWN
 
 
 GLOBAL_TEMP_FOLDER = Path("tmp/")

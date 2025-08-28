@@ -1,15 +1,16 @@
-from pathlib import Path
-from tempfile import NamedTemporaryFile
-from typing import Iterable
+import atexit
 import functools
 import os
-from .constants import Schema, Row, Columns, GLOBAL_TEMP_FOLDER
-import time
 import pickle
+import time
+from collections.abc import Iterable
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
-from perfetto.trace_builder.proto_builder import TraceProtoBuilder
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import TrackEvent
-import atexit
+from perfetto.trace_builder.proto_builder import TraceProtoBuilder
+
+from .constants import GLOBAL_TEMP_FOLDER, Columns, Row, Schema
 
 TRUSTED_PACKET_SEQUENCE_ID = 0
 NESTED_SLICE_TRACK_UUID = 12

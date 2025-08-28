@@ -1,8 +1,10 @@
-from .io import BlockFile
-from .constants import Row
-from typing import Any, Callable, TypeVar, Iterator, Iterable
-from pathlib import Path
+from collections.abc import Iterable, Iterator
 from heapq import heappop, heappush
+from pathlib import Path
+from typing import Any, Callable, TypeVar
+
+from .constants import Row
+from .io import BlockFile
 
 SORT_BLOCK_SIZE = 10 * 1024**2  # 10 MB
 
@@ -31,7 +33,7 @@ def external_sort(
         output_block_file.append_rows(rows)
 
     kway_merge(
-        iterators, key_col, write_merge_result, action_trigger_size=SORT_BLOCK_SIZE
+        iterators, key_col, write_merge_result, action_trigger_size=SORT_BLOCK_SIZE,
     )
 
 
@@ -84,12 +86,12 @@ def external_merge_join(
         if left_key(left) == right_key(right):
             lefts = [left]
             while (left := next(left_iterator, None)) and left_key(left) == left_key(
-                lefts[0]
+                lefts[0],
             ):
                 lefts.append(left)
             rights = [right]
             while (right := next(right_iterator, None)) and right_key(
-                right
+                right,
             ) == right_key(rights[0]):
                 rights.append(right)
             for ls in lefts:

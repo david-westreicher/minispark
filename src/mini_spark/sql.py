@@ -1,8 +1,9 @@
-from dataclasses import dataclass
 import operator
-from typing import Any, Iterable, Callable, Self
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any, Callable, Self
 
-from .constants import Schema, ColumnType
+from .constants import ColumnType, Schema
 
 
 class Col:
@@ -36,14 +37,14 @@ class Col:
     def __truediv__(self, other: Any):
         return BinaryOperatorColumn(self, other, operator.truediv)
 
-    def __eq__(self, other: Any) -> Self:  # type:ignore
+    def __eq__(self, other: object) -> Self:  # type:ignore
         return BinaryOperatorColumn(self, other, operator.eq)  # type:ignore
 
     def execute(self, row: dict[str, Any]) -> Any:
         return row[self.name]
 
     def execute_row(self, row: tuple[Any, ...]) -> Any:
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def alias(self, name: str):
         return AliasColumn(self, name)
@@ -54,7 +55,7 @@ class Col:
 
     def infer_type(self, schema: Schema) -> ColumnType:
         col_type = next(
-            (type for col_name, type in schema if col_name == self.name), None
+            (type for col_name, type in schema if col_name == self.name), None,
         )
         if col_type is None:
             raise ValueError(f"Column {self.name} not found in schema {schema}")
@@ -62,7 +63,7 @@ class Col:
 
     def schema_executor(self, schema: Schema) -> "Col":
         col_pos = next(
-            (i for i, (col_name, _) in enumerate(schema) if col_name == self.name), None
+            (i for i, (col_name, _) in enumerate(schema) if col_name == self.name), None,
         )
         if col_pos is None:
             raise ValueError(f"Column {self.name} not found in schema {schema}")
@@ -79,7 +80,7 @@ class SchemaCol(Col):
         self.col_pos = col_pos
 
     def execute(self, row: dict[str, Any]) -> Any:
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def execute_row(self, row: tuple[Any, ...]) -> Any:
         return row[self.col_pos]
@@ -148,7 +149,7 @@ class BinaryOperatorColumn(Col):
 
     def execute_row(self, row: tuple[Any, ...]) -> Any:
         return self.operator(
-            self.left_side.execute_row(row), self.right_side.execute_row(row)
+            self.left_side.execute_row(row), self.right_side.execute_row(row),
         )
 
     @property
@@ -165,7 +166,7 @@ class BinaryOperatorColumn(Col):
         right_type = self.right_side.infer_type(schema)
         if left_type != right_type:
             raise TypeError(
-                f"Type mismatch in binary operation: {left_type} {self.operator} {right_type}"
+                f"Type mismatch in binary operation: {left_type} {self.operator} {right_type}",
             )
         return left_type
 

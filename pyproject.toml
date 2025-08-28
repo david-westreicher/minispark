@@ -13,11 +13,17 @@ pythonpath = ["src"]
 [tool.mypy]
 python_version = "3.13"
 files = ["src", "tests"]
-
-# Default: be strict
+strict = true
 ignore_missing_imports = false
 
-# But relax just for perfetto.*
 [[tool.mypy.overrides]]
 module = "perfetto.*"
 ignore_missing_imports = true
+
+[tool.ruff]
+lint.select = ["ALL"]
+src = ["src", "tests"]
+line-length = 120
+ignore = [
+    "S101", # Allow use of assert statements
+]

@@ -1,21 +1,23 @@
+from abc import ABC, abstractmethod
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
-from abc import ABC, abstractmethod
-from typing import Any, Iterable, Literal
-from collections import Counter
-from .io import BlockFile
-from .utils import create_temp_file, nice_schema, convert_rows_to_columns, trace
-from .sql import Col, BinaryOperatorColumn
+from typing import Any, Literal
+
+from .algorithms import SORT_BLOCK_SIZE, external_merge_join, external_sort
 from .constants import (
-    Row,
     SHUFFLE_FOLDER,
-    Schema,
-    ColumnType,
-    Columns,
     SHUFFLE_PARTITIONS,
+    Columns,
+    ColumnType,
+    Row,
+    Schema,
 )
-from .algorithms import SORT_BLOCK_SIZE, external_sort, external_merge_join
+from .io import BlockFile
+from .sql import BinaryOperatorColumn, Col
+from .utils import convert_rows_to_columns, create_temp_file, nice_schema, trace
 
 JoinType = Literal["inner", "left", "right", "outer"]
 
@@ -148,7 +150,7 @@ class ProjectTask(Task):
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(
-            f"{indent} Project({', '.join(str(col) for col in self.columns)}):{nice_schema(self.inferred_schema)}"
+            f"{indent} Project({', '.join(str(col) for col in self.columns)}):{nice_schema(self.inferred_schema)}",
         )
         self.parent_task.explain(lvl + 1)
 
@@ -175,13 +177,13 @@ class LoadTableTask(Task):
         yield from self.parent_task.create_jobs(full_task, worker_count)
         for block_id in range(len(BlockFile(self.file_path).block_starts)):
             yield LoadTableBlockJob(
-                full_task, table_file=self.file_path, block_id=block_id
+                full_task, table_file=self.file_path, block_id=block_id,
             )
 
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(
-            f"{indent} LoadTable({self.file_path}):{nice_schema(self.inferred_schema)}"
+            f"{indent} LoadTable({self.file_path}):{nice_schema(self.inferred_schema)}",
         )
         self.parent_task.explain(lvl + 1)
 
@@ -213,7 +215,7 @@ class LoadShuffleFileTask(Task):
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(
-            f"{indent} LoadShuffleFile(stage_to_load={self.stage_to_load}):{nice_schema(self.inferred_schema)}"
+            f"{indent} LoadShuffleFile(stage_to_load={self.stage_to_load}):{nice_schema(self.inferred_schema)}",
         )
         self.parent_task.explain(lvl + 1)
 
@@ -229,7 +231,7 @@ class FilterTask(Task):
     def execute(self, input_columns: Columns, job: Job) -> Columns:
         assert self.parent_task.inferred_schema is not None
         condition_col = project_column(
-            self.condition, input_columns, self.parent_task.inferred_schema
+            self.condition, input_columns, self.parent_task.inferred_schema,
         )
         return tuple(
             [val for val, cond in zip(col, condition_col) if cond]
@@ -271,10 +273,10 @@ class JoinTask(Task):
         assert self.right_key
         assert type(job) is LoadJoinFilesJob
         left_sorted_file = self.sort_shuffle_files(
-            job.left_shuffle_files, self.left_key
+            job.left_shuffle_files, self.left_key,
         )
         right_sorted_file = self.sort_shuffle_files(
-            job.right_shuffle_files, self.right_key
+            job.right_shuffle_files, self.right_key,
         )
         joined_rows: list[Row] = []
         if left_sorted_file and right_sorted_file:
@@ -286,7 +288,7 @@ class JoinTask(Task):
                     self.left_key.execute,
                     self.right_key.execute,
                     self.how,
-                )
+                ),
             )
         if left_sorted_file is not None:
             left_sorted_file.unlink(missing_ok=True)
@@ -344,18 +346,18 @@ class JoinTask(Task):
                 full_task,
                 left_shuffle_files=list(
                     self.collect_shuffle_files(
-                        self.left_shuffle_stage, worker_count, partition
-                    )
+                        self.left_shuffle_stage, worker_count, partition,
+                    ),
                 ),
                 right_shuffle_files=list(
                     self.collect_shuffle_files(
-                        self.right_shuffle_stage, worker_count, partition
-                    )
+                        self.right_shuffle_stage, worker_count, partition,
+                    ),
                 ),
             )
 
     def collect_shuffle_files(
-        self, stage: int, worker_count: int, partition: int
+        self, stage: int, worker_count: int, partition: int,
     ) -> Iterable[Path]:
         for worker_from in range(worker_count):
             shuffle_file = SHUFFLE_FOLDER / f"{stage}_{worker_from}_{partition}.bin"
@@ -366,7 +368,7 @@ class JoinTask(Task):
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(
-            f'{indent} Join({self.join_condition}, "{self.how}", left_shuffle: {self.left_shuffle_stage}, right_shuffle: {self.right_shuffle_stage}):{nice_schema(self.inferred_schema)}'
+            f'{indent} Join({self.join_condition}, "{self.how}", left_shuffle: {self.left_shuffle_stage}, right_shuffle: {self.right_shuffle_stage}):{nice_schema(self.inferred_schema)}',
         )
         self.parent_task.explain(lvl + 1)
         self.right_side_task.explain(lvl + 1)
@@ -381,7 +383,7 @@ class CountTask(Task):
     def execute(self, input_columns: Columns, job: Job) -> Columns:
         assert self.parent_task.inferred_schema is not None
         group_column = project_column(
-            self.group_by_column, input_columns, self.parent_task.inferred_schema
+            self.group_by_column, input_columns, self.parent_task.inferred_schema,
         )
         counts = Counter(group_column)
         return (list(counts.keys()), list(counts.values()))
@@ -409,7 +411,7 @@ class ShuffleToFileTask(Task):
         assert self.key_column is not None
         assert self.parent_task.inferred_schema is not None
         key_column = project_column(
-            self.key_column, input_columns, self.parent_task.inferred_schema
+            self.key_column, input_columns, self.parent_task.inferred_schema,
         )
         final_output: tuple[list[list[Any]], ...] = tuple(
             [] for _ in range(SHUFFLE_PARTITIONS)
@@ -427,12 +429,12 @@ class ShuffleToFileTask(Task):
             if len(full_data[0]) == 0:
                 continue
             shuffle_file = Path(
-                SHUFFLE_FOLDER / f"{job.current_stage}_{job.worker_id}_{partition}.bin"
+                SHUFFLE_FOLDER / f"{job.current_stage}_{job.worker_id}_{partition}.bin",
             )
             print("writing", shuffle_file.absolute())
             data_in_rows = list(zip(*full_data))
             BlockFile(shuffle_file).append_data(
-                data_in_rows, self.parent_task.inferred_schema
+                data_in_rows, self.parent_task.inferred_schema,
             )
         return ()
 
@@ -456,7 +458,7 @@ class ShuffleToFileTask(Task):
     def explain(self, lvl: int = 0):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(
-            f"{indent} ShuffleToFile({self.key_column}):{nice_schema(self.inferred_schema)}"
+            f"{indent} ShuffleToFile({self.key_column}):{nice_schema(self.inferred_schema)}",
         )
         self.parent_task.explain(lvl + 1)
 
@@ -466,7 +468,7 @@ class VoidTask(Task):
     parent_task: Task = None  # type: ignore
 
     def execute(self, input_columns: Columns, job: Job) -> Columns:
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def explain(self, lvl: int = 0):
         pass

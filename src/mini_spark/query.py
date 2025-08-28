@@ -1,21 +1,22 @@
-from typing import Iterable
+from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
+
+from . import utils
+from .constants import Columns, Row
 from .tasks import (
     Job,
-    LoadShuffleFileTask,
-    Task,
     JoinTask,
-    VoidTask,
+    LoadShuffleFileTask,
     ShuffleToFileTask,
+    Task,
+    VoidTask,
 )
-from .constants import Columns, Row
 from .utils import (
-    convert_columns_to_rows,
     TRACER,
+    convert_columns_to_rows,
     trace,
 )
-from . import utils
 
 
 class Executor:

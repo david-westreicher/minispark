@@ -1,12 +1,14 @@
+import os
+from collections.abc import Iterable
+from contextlib import ExitStack
+from dataclasses import dataclass, field
+from functools import cached_property
 from io import BufferedWriter
 from pathlib import Path
-from functools import cached_property
-from typing import Any, BinaryIO, Iterable, Self
-from dataclasses import dataclass, field
-import os
-from contextlib import ExitStack
+from typing import Any, BinaryIO, Self
+
 from . import constants
-from .constants import Row, Schema, ColumnType, Columns
+from .constants import Columns, ColumnType, Row, Schema
 
 
 def validate(schema, data):
@@ -19,7 +21,7 @@ def validate(schema, data):
 def binarize_value(value) -> bytes:
     if type(value) is int:
         return value.to_bytes(4, byteorder="little", signed=True)
-    elif type(value) is str:
+    if type(value) is str:
         assert len(value) < 255
         return bytes([len(value) & 0xFF] + list(value.encode("utf-8")))
     raise ValueError(f"Unsupported type {type(value)}:{value}")
@@ -107,7 +109,7 @@ def _deserialize_block_column(
     column_name: str,
     schema: Schema,
     block_rows: int,
-    chunk_size: int | float = float("inf"),
+    chunk_size: float = float("inf"),
 ) -> Iterable[list[Any]]:
     # skip to correct column
     for schema_col_name, _ in schema:
@@ -190,7 +192,7 @@ class BlockFile:
         return self._write_data_with_known_schema(tuple_data, schema=schema)
 
     def _write_data_with_known_schema(
-        self, data: Iterable[tuple[Any, ...]], schema: Schema = []
+        self, data: Iterable[tuple[Any, ...]], schema: Schema = [],
     ) -> Self:
         assert schema
         with self.file.open(mode="wb") as f:
@@ -272,7 +274,7 @@ class BlockFile:
             yield row_data
 
     def create_block_reader(
-        self, block_start: int, row_buffer_size: int
+        self, block_start: int, row_buffer_size: int,
     ) -> Iterable[Row]:
         schema = self.file_schema
         with self.file.open("rb") as f:
@@ -285,7 +287,7 @@ class BlockFile:
                 block_rows = read_unsigned_int(f)
             column_readers = [
                 _deserialize_block_column(
-                    f, col_name, schema, block_rows, chunk_size=row_buffer_size
+                    f, col_name, schema, block_rows, chunk_size=row_buffer_size,
                 )
                 for f, (col_name, _) in zip(file_handles, schema)
             ]

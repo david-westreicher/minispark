@@ -1,8 +1,10 @@
-import pytest
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 from tempfile import NamedTemporaryFile
 from unittest.mock import MagicMock
+
+import pytest
+
 from mini_spark import utils
 
 
