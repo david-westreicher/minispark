@@ -2,8 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from mini_spark.dataframe import Col, DataFrame
+from mini_spark.dataframe import DataFrame
 from mini_spark.io import BlockFile
+from mini_spark.sql import Col
 
 
 @pytest.fixture
@@ -64,9 +65,7 @@ def test_select_expression(test_data: str):
 
 def test_select_alias(test_data: str):
     # act
-    rows = (
-        DataFrame().table(test_data).select(Col("fruit").alias("fruit_name")).collect()
-    )
+    rows = DataFrame().table(test_data).select(Col("fruit").alias("fruit_name")).collect()
 
     # assert
     assert rows == [
@@ -109,7 +108,7 @@ def test_groupby(test_data: str):
     rows = DataFrame().table(test_data).group_by(Col("fruit")).count().collect()
 
     # assert
-    # TODO: implement assertDataFrameEquals
+    # TODO(david): implement assertDataFrameEquals
     expected_rows = [
         {"fruit": "apple", "count": 2},
         {"fruit": "banana", "count": 2},
@@ -128,9 +127,7 @@ def test_join(test_data: str):
         .table(test_data)
         .select(Col("fruit").alias("fruit_left"), Col("color"))
         .join(
-            DataFrame()
-            .table(test_data)
-            .select(Col("fruit").alias("fruit_right"), Col("quantity")),
+            DataFrame().table(test_data).select(Col("fruit").alias("fruit_right"), Col("quantity")),
             on=Col("fruit_left") == Col("fruit_right"),
             how="inner",
         )

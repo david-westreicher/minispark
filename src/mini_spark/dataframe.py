@@ -1,7 +1,8 @@
-from pathlib import Path
-from typing import Self
+from __future__ import annotations
 
-from .constants import Row, Schema
+from pathlib import Path
+from typing import TYPE_CHECKING, Self
+
 from .query import Executor
 from .sql import BinaryOperatorColumn, Col
 from .tasks import (
@@ -17,13 +18,16 @@ from .tasks import (
     VoidTask,
 )
 
+if TYPE_CHECKING:
+    from .constants import Row, Schema
+
 
 class GroupedData:
-    def __init__(self, df: "DataFrame", column: Col):
+    def __init__(self, df: DataFrame, column: Col) -> None:
         self.df = df
         self.group_column = column
 
-    def count(self) -> "DataFrame":
+    def count(self) -> DataFrame:
         self.df.task = ShuffleToFileTask(self.df.task, key_column=self.group_column)
         self.df.task = LoadShuffleFileTask(self.df.task)
         self.df.task = CountTask(self.df.task, group_by_column=self.group_column)
@@ -41,14 +45,14 @@ class DataFrame:
     def collect(self) -> list[Row]:
         return list(Executor(self.task).execute())
 
-    def show(self, n=5) -> None:
+    def show(self, n: int = 10) -> None:
         first = True
         for row in Executor(self.task).execute(limit=n):
             if first:
-                print("|" + ("|".join(f"{col:<10}" for col in row.keys())) + "|")
-                print("|" + ("+".join("-" * 10 for _ in row.keys())) + "|")
+                print("|" + ("|".join(f"{col:<10}" for col in row)) + "|")  # noqa: T201
+                print("|" + ("+".join("-" * 10 for _ in row)) + "|")  # noqa: T201
                 first = False
-            print("|" + ("|".join(f"{v:<10}" for v in row.values())) + "|")
+            print("|" + ("|".join(f"{v:<10}" for v in row.values())) + "|")  # noqa: T201
 
     @property
     def schema(self) -> Schema:
@@ -65,9 +69,9 @@ class DataFrame:
     def group_by(self, column: Col) -> GroupedData:
         return GroupedData(self, column)
 
-    def join(self, other_df: Self, on: Col, how: JoinType):
+    def join(self, other_df: Self, on: Col, how: JoinType) -> DataFrame:
         assert type(on) is BinaryOperatorColumn
-        # TODO: extract left,right side correctly (maybe in analyze)
+        # TODO(david): extract left,right side correctly (maybe in analyze)
         self.task = ShuffleToFileTask(self.task)
         other_df.task = ShuffleToFileTask(other_df.task)
         self.task = JoinTask(

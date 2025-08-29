@@ -1,8 +1,8 @@
 from pathlib import Path
 
+from mini_spark.constants import ColumnType
 from mini_spark.io import (
     BlockFile,
-    ColumnType,
     _deserialize_schema,
 )
 

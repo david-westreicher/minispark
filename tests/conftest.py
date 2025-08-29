@@ -8,8 +8,8 @@ import pytest
 from mini_spark import utils
 
 
-@pytest.fixture(scope="function", autouse=True)
-def setup_function(tmp_path: Path, monkeypatch):
+@pytest.fixture(autouse=True)
+def setup_function(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     shuffle_folder = tmp_path / "shuffle"
     shuffle_folder.mkdir()
     (tmp_path / "tmp").mkdir()
@@ -19,7 +19,7 @@ def setup_function(tmp_path: Path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def patch_tracer(monkeypatch):
+def patch_tracer(monkeypatch: pytest.MonkeyPatch):
     mock_tracer = MagicMock()
     utils.TRACER.unregister()
     monkeypatch.setattr("mini_spark.utils.TRACER", mock_tracer)

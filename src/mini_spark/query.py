@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 from copy import deepcopy
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import utils
 from .constants import Columns, Row
@@ -18,22 +18,25 @@ from .utils import (
     trace,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 class Executor:
-    def __init__(self, task: Task, worker_count: int = 10):
+    def __init__(self, task: Task, worker_count: int = 10) -> None:
         self.task = task
         self.worker_count = worker_count
         self.shuffle_files_to_delete: set[Path] = set()
 
-    def execute(self, limit=-1) -> Iterable[Row]:
+    def execute(self, limit: int = -1) -> Iterable[Row]:
         Analyzer.analyze(self.task)
         stages = list(reversed(list(self.split_into_stages(self.task))))
         for stage_num, stage in enumerate(stages):
             Analyzer.optimize(stage, stage_num)
         TRACER.start("Execution")
         for i, stage in enumerate(stages):
-            print("#" * 100)
-            print("Stage", i)
+            print("#" * 100)  # noqa: T201
+            print("Stage", i)  # noqa: T201
             TRACER.start(f"Stage {i}")
             for row in self.execute_stage(stage, i):
                 if limit == 0:
@@ -50,7 +53,7 @@ class Executor:
         self.shuffle_files_to_delete.clear()
         TRACER.end()
 
-    def execute_stage(self, stage, stage_num: int) -> Iterable[Row]:
+    def execute_stage(self, stage: Task, stage_num: int) -> Iterable[Row]:
         assert stage.inferred_schema is not None
         stage.explain()
         TRACER.start("Create jobs")
@@ -59,8 +62,6 @@ class Executor:
             job.current_stage = stage_num
             self.shuffle_files_to_delete.update(job.files_to_delete)
         TRACER.end()
-        print("Jobs:", len(jobs))
-        print("Physical plan created")
         for job_i, job_result in enumerate(map(self.execute_job_group_on_worker, jobs)):
             TRACER.start(f"Process job {job_i}")
             yield from convert_columns_to_rows(job_result, stage.inferred_schema)
@@ -100,7 +101,7 @@ class Executor:
 class Analyzer:
     @staticmethod
     @trace("analyze")
-    def analyze(task: Task):
+    def analyze(task: Task) -> None:
         if type(task) is VoidTask:
             return
         task.inferred_schema = task.validate_schema()

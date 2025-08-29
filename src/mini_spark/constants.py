@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -8,18 +10,19 @@ class ColumnType(Enum):
     STRING = (1, str)
     UNKNOWN = (255, type(None))
 
-    def __init__(self, value, py_type):
+    def __init__(self, value: int, py_type: type) -> None:
         self.ordinal = value
         self.type = py_type
 
     @staticmethod
-    def from_ordinal(ordinal: int):
-        for type in ColumnType:
-            if type.ordinal == ordinal:
-                return type
+    def from_ordinal(ordinal: int) -> ColumnType:
+        for col_type in ColumnType:
+            if col_type.ordinal == ordinal:
+                return col_type
+        raise NotImplementedError(ordinal)
 
     @staticmethod
-    def of(value: Any):
+    def of(value: int | str) -> ColumnType:
         if type(value) is int:
             return ColumnType.INTEGER
         if type(value) is str:
@@ -27,6 +30,7 @@ class ColumnType(Enum):
         return ColumnType.UNKNOWN
 
 
+ColumnTypePython = int | str
 GLOBAL_TEMP_FOLDER = Path("tmp/")
 SHUFFLE_FOLDER = Path("shuffle/")
 BLOCK_SIZE = 10 * 1024 * 1024  # 10 MB

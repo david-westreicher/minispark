@@ -17,7 +17,8 @@ from mini_spark.io import BlockFile
 
 
 @pytest.mark.parametrize(
-    "key_function", [lambda row: row["int_col"], lambda row: row["str_col"]],
+    "key_function",
+    [lambda row: row["int_col"], lambda row: row["str_col"]],
 )
 def test_external_sort(tmp_path: Path, key_function: Callable[[Row], Any]):
     # arrange
@@ -25,9 +26,7 @@ def test_external_sort(tmp_path: Path, key_function: Callable[[Row], Any]):
     tmp_file = tmp_path / "temp.bin"
     output_file = tmp_path / "sorted.bin"
     random.seed(42)
-    input_data: list[Row] = [
-        {"int_col": i, "str_col": f"text_{i}"} for i in range(1_000)
-    ]
+    input_data: list[Row] = [{"int_col": i, "str_col": f"text_{i}"} for i in range(1_000)]
     shuffle(input_data)
     BlockFile(input_file, block_size=SORT_BLOCK_SIZE).write_rows(input_data)
 
@@ -93,7 +92,10 @@ def test_kway_merge_uncomparable():
 
     # act
     kway_merge(
-        iterators, key=lambda x: x[0], action=result_action, action_trigger_size=2,
+        iterators,
+        key=lambda x: x[0],
+        action=result_action,
+        action_trigger_size=2,
     )
 
     # assert

@@ -3,9 +3,10 @@ from unittest.mock import patch
 
 import pytest
 
-from mini_spark.sql import Col, ColumnType, Lit
+from mini_spark.constants import ColumnType
+from mini_spark.io import BlockFile
+from mini_spark.sql import Col, Lit
 from mini_spark.tasks import (
-    BlockFile,
     FilterTask,
     JoinTask,
     LoadShuffleFileTask,
@@ -23,7 +24,9 @@ def test_schema_propagation_load_table():
 
     # act
     with patch.object(
-        BlockFile, "file_schema", property(lambda self: test_table_schema),
+        BlockFile,
+        "file_schema",
+        property(lambda _: test_table_schema),
     ):
         schema = task.validate_schema()
 
@@ -47,7 +50,9 @@ def test_schema_propagation_projection():
 
     # act
     with patch.object(
-        BlockFile, "file_schema", property(lambda self: test_table_schema),
+        BlockFile,
+        "file_schema",
+        property(lambda _: test_table_schema),
     ):
         schema = task.validate_schema()
 
@@ -76,7 +81,7 @@ def test_schema_propagation_projection_type_mismatch():
         patch.object(
             BlockFile,
             "file_schema",
-            property(lambda self: test_table_schema),
+            property(lambda _: test_table_schema),
         ),
         pytest.raises(TypeError, match="Type mismatch in binary operation"),
     ):
@@ -96,7 +101,9 @@ def test_schema_propagation_projection_select_star():
 
     # act
     with patch.object(
-        BlockFile, "file_schema", property(lambda self: test_table_schema),
+        BlockFile,
+        "file_schema",
+        property(lambda _: test_table_schema),
     ):
         schema = task.validate_schema()
 
@@ -116,7 +123,9 @@ def test_schema_propagation_load_shuffle_file_task():
 
     # act
     with patch.object(
-        BlockFile, "file_schema", property(lambda self: test_table_schema),
+        BlockFile,
+        "file_schema",
+        property(lambda _: test_table_schema),
     ):
         schema = task.validate_schema()
 
@@ -133,7 +142,9 @@ def test_schema_propagation_filter_task():
 
     # act
     with patch.object(
-        BlockFile, "file_schema", property(lambda self: test_table_schema),
+        BlockFile,
+        "file_schema",
+        property(lambda _: test_table_schema),
     ):
         schema = task.validate_schema()
 
@@ -151,7 +162,9 @@ def test_schema_propagation_filter_task_fails():
     # act / assert
     with (
         patch.object(
-            BlockFile, "file_schema", property(lambda self: test_table_schema),
+            BlockFile,
+            "file_schema",
+            property(lambda _: test_table_schema),
         ),
         pytest.raises(ValueError, match="Unknown columns in Filter"),
     ):
@@ -177,7 +190,9 @@ def test_schema_propagation_join_task():
 
     # act
     with patch.object(
-        BlockFile, "file_schema", property(lambda self: test_table_schema),
+        BlockFile,
+        "file_schema",
+        property(lambda _: test_table_schema),
     ):
         schema = task.validate_schema()
 

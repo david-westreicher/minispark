@@ -17,13 +17,27 @@ strict = true
 ignore_missing_imports = false
 
 [[tool.mypy.overrides]]
-module = "perfetto.*"
-ignore_missing_imports = true
+module = "tests.*"
+strict = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
 
 [tool.ruff]
 lint.select = ["ALL"]
 src = ["src", "tests"]
 line-length = 120
-ignore = [
-    "S101", # Allow use of assert statements
+lint.ignore = [
+    "S101",   # Allow use of assert statements
+    "D",      # Missing docstring
+    "FIX002", # Allow TODO comments
+    "TD003",  # Allow TODO without issue link
+    "COM812",
+    "EM102",  # Allow f-string in errors
+    "TRY003", # Allow messages for exceptions
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**.py" = [
+    "ANN201",  # Allow missing type annotations in tests
+    "PLR2004", # Allow magic values
 ]

@@ -1,17 +1,22 @@
+from __future__ import annotations
+
 import atexit
 import functools
-import os
 import pickle
 import time
-from collections.abc import Iterable
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import TrackEvent
 from perfetto.trace_builder.proto_builder import TraceProtoBuilder
 
 from .constants import GLOBAL_TEMP_FOLDER, Columns, Row, Schema
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+F = TypeVar("F", bound=Callable[..., Any])
 TRUSTED_PACKET_SEQUENCE_ID = 0
 NESTED_SLICE_TRACK_UUID = 12
 MAIN_SYSTEM_TRACK_UUID = 123123
@@ -34,19 +39,18 @@ def convert_rows_to_columns(rows: Iterable[Row], schema: Schema) -> Columns:
 
 
 class Tracer:
-    def __init__(self):
+    def __init__(self) -> None:
         self.trace_proto = TraceProtoBuilder()
-        self.tracks = set()
+        self.tracks: set[int] = set()
         self.define_custom_track(MAIN_SYSTEM_TRACK_UUID, "Main System")
         atexit.register(self.save, "current.pftrace")
 
-    def unregister(self):
+    def unregister(self) -> None:
         atexit.unregister(self.save)
 
-    def define_custom_track(self, track_uuid, name, parent_track_uuid=None):
+    def define_custom_track(self, track_uuid: int, name: str, parent_track_uuid: int | None = None) -> None:
         if track_uuid in self.tracks:
             return
-        print("define track", track_uuid, name)
         packet = self.trace_proto.add_packet()
         desc = packet.track_descriptor
         desc.uuid = track_uuid
@@ -55,36 +59,31 @@ class Tracer:
             desc.parent_uuid = parent_track_uuid
         self.tracks.add(track_uuid)
 
-    def start(self, name: str, track_uuid: int = -1):
+    def start(self, name: str, track_uuid: int = -1) -> None:
         packet = self.trace_proto.add_packet()
         packet.timestamp = time.time_ns()
         packet.track_event.type = TrackEvent.TYPE_SLICE_BEGIN
-        packet.track_event.track_uuid = (
-            MAIN_SYSTEM_TRACK_UUID if track_uuid == -1 else track_uuid
-        )
+        packet.track_event.track_uuid = MAIN_SYSTEM_TRACK_UUID if track_uuid == -1 else track_uuid
         packet.track_event.name = name
         packet.trusted_packet_sequence_id = TRUSTED_PACKET_SEQUENCE_ID
 
-    def end(self, track_uuid: int = -1):
+    def end(self, track_uuid: int = -1) -> None:
         packet = self.trace_proto.add_packet()
         packet.timestamp = time.time_ns()
         packet.track_event.type = TrackEvent.TYPE_SLICE_END
-        packet.track_event.track_uuid = (
-            MAIN_SYSTEM_TRACK_UUID if track_uuid == -1 else track_uuid
-        )
+        packet.track_event.track_uuid = MAIN_SYSTEM_TRACK_UUID if track_uuid == -1 else track_uuid
         packet.trusted_packet_sequence_id = TRUSTED_PACKET_SEQUENCE_ID
 
-    def save(self, filename: str):
-        print("save")
-        with open(filename, "wb") as f:
+    def save(self, filename: str) -> None:
+        with Path(filename).open("wb") as f:
             f.write(self.trace_proto.serialize())
 
 
 class MyTracer:
-    def __init__(self):
-        self.events = []
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
 
-    def start(self, name: str):
+    def start(self, name: str) -> None:
         packet = {
             "timestamp": time.time_ns(),
             "track_event.type": TrackEvent.TYPE_SLICE_BEGIN,
@@ -92,25 +91,23 @@ class MyTracer:
         }
         self.events.append(packet)
 
-    def end(self):
+    def end(self) -> None:
         packet = {
             "timestamp": time.time_ns(),
             "track_event.type": TrackEvent.TYPE_SLICE_END,
         }
         self.events.append(packet)
 
-    def save(self, filename: str):
+    def save(self, filename: str) -> None:
         if self.events:
-            with open(filename, "wb") as f:
+            with Path(filename).open("wb") as f:
                 pickle.dump(self.events, f)
-        else:
-            print("No events to save", filename)
 
 
-def trace(block_name: str):
-    def decorator(func):
+def trace(block_name: str) -> Callable[[F], F]:
+    def decorator(func: F) -> F:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args, **kwargs):  # type: ignore[no-untyped-def] # noqa: ANN002, ANN003, ANN202
             TRACER.start(block_name)
             try:
                 result = func(*args, **kwargs)
@@ -118,24 +115,22 @@ def trace(block_name: str):
                 TRACER.end()
             return result
 
-        return wrapper
+        return wrapper  # type: ignore[return-value]
 
     return decorator
 
 
-def collect_and_trace_worker_traces(worker_count: int):
-    print("collect trace files")
+def collect_and_trace_worker_traces(worker_count: int) -> None:
     for worker_id in range(worker_count):
-        worker_trace_file = f"worker-{worker_id}.pftrace"
+        worker_trace_file = Path(f"worker-{worker_id}.pftrace")
         try:
-            with open(worker_trace_file, "rb") as f:
-                print(worker_trace_file)
+            with worker_trace_file.open("rb") as f:
                 TRACER.define_custom_track(
                     worker_id + 1,
                     name=f"Worker {worker_id}",
                     parent_track_uuid=MAIN_SYSTEM_TRACK_UUID,
                 )
-                events = pickle.load(f)
+                events = pickle.load(f)  # TODO(david): don't use pickle  # noqa: S301
                 for event in events:
                     packet = TRACER.trace_proto.add_packet()
                     packet.timestamp = event["timestamp"]
@@ -144,9 +139,9 @@ def collect_and_trace_worker_traces(worker_count: int):
                     if "track_event.name" in event:
                         packet.track_event.name = event["track_event.name"]
                     packet.trusted_packet_sequence_id = TRUSTED_PACKET_SEQUENCE_ID
-            os.unlink(worker_trace_file)
+            worker_trace_file.unlink()
         except FileNotFoundError:
-            print(f"Worker trace file {worker_trace_file} not found.")
+            pass
 
 
 TRACER = Tracer()
