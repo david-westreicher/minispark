@@ -50,6 +50,11 @@ class LoadTableBlockJob(Job):
 
 
 @dataclass(kw_only=True)
+class WriteToLocalFileJob(Job):
+    local_file: Path
+
+
+@dataclass(kw_only=True)
 class LoadShuffleFilesJob(Job):
     shuffle_files: list[Path]
     shuffle_block_to_load: tuple[Path, int] | None = None
@@ -125,7 +130,48 @@ class ProjectTask(Task):
         return tuple(project_column(col, input_columns, self.parent_task.inferred_schema) for col in self.columns)
 
     def generate_zig_code(self, function_name: str) -> str:
-        raise NotImplementedError
+        def generate_projection_functions() -> str:
+            assert self.parent_task.inferred_schema is not None
+            projections_code = [
+                col.generate_zig_projection_function(
+                    f"{function_name}_project_{col_num:0>2}",
+                    self.parent_task.inferred_schema,
+                )
+                for col_num, col in enumerate(self.columns)
+            ]
+            return "\n".join(projections_code)
+
+        def generate_projection_calls() -> str:
+            assert self.parent_task.inferred_schema is not None
+            code = [
+                f"const slice: []ColumnData = try allocator.alloc(ColumnData, {len(self.columns)});",
+                *[
+                    f"""
+                        const col_{col_num:0>2} = try allocator.alloc({
+                        col.infer_type(self.parent_task.inferred_schema).native_zig_type
+                    }, rows);
+                        slice[{col_num}] = try {function_name}_project_{col_num:0>2}(
+                            allocator, input, col_{col_num:0>2});
+                    """
+                    for col_num, col in enumerate(self.columns)
+                ],
+            ]
+            return "\n".join(code)
+
+        return f"""
+        {generate_projection_functions()}
+        pub fn {function_name}(
+            allocator: std.mem.Allocator,
+            input: []const ColumnData,
+            job: Job,
+            schema: []const ColumnSchema) ![]const ColumnData {{
+            _ = job;
+            _ = schema;
+            const rows = input[0].len();
+            {generate_projection_calls()}
+            return slice;
+        }}
+        """
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -253,7 +299,35 @@ class FilterTask(Task):
         return tuple([val for val, cond in zip(col, condition_col, strict=True) if cond] for col in input_columns)
 
     def generate_zig_code(self, function_name: str) -> str:
-        raise NotImplementedError
+        condition_function_name = f"{function_name}_condition"
+
+        def generate_condition_function() -> str:
+            assert self.parent_task.inferred_schema is not None
+            return self.condition.generate_zig_condition_function(
+                condition_function_name,
+                self.parent_task.inferred_schema,
+            )
+
+        return f"""
+            {generate_condition_function()}
+            pub fn {function_name}(
+                allocator: std.mem.Allocator,
+                input: []const ColumnData,
+                job: Job,
+                schema: []const ColumnSchema) ![]const ColumnData {{
+                _ = job;
+                _ = schema;
+                const rows = input[0].len();
+                const condition_col = try allocator.alloc(bool, rows);
+                {condition_function_name}(allocator, input, condition_col);
+                const slice: []ColumnData = try allocator.alloc(ColumnData, input.len);
+                for (input, 0..) |col, col_idx| {{
+                    const filtered_column = try Executor.filter_column(col, condition_col, allocator);
+                    slice[col_idx] = filtered_column;
+                }}
+                return slice;
+            }}
+        """
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -475,6 +549,39 @@ class ShuffleToFileTask(Task):
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(  # noqa: T201
             f"{indent} ShuffleToFile({self.key_column}):{nice_schema(self.inferred_schema)}",
+        )
+        self.parent_task.explain(lvl + 1)
+
+
+@dataclass
+class WriteToLocalFileTask(Task):
+    @trace("WriteToLocalFileTask")
+    def execute(self, input_columns: Columns, job: Job) -> Columns:
+        assert type(job) is WriteToLocalFileJob
+        BlockFile(job.local_file).append_data(
+            [input_columns],
+            self.parent_task.inferred_schema,
+        )
+        return ()
+
+    def generate_zig_code(self, function_name: str) -> str:
+        # TODO(david): should be append, not write
+        return f"""
+            pub fn {function_name}(
+                allocator: std.mem.Allocator,
+                input: []const ColumnData,
+                job: Job, schema: []const ColumnSchema) ![]const ColumnData {{
+                var block_file = try Executor.BlockFile.init(allocator, schema);
+                const block = Executor.Block{{ .cols = input }};
+                try block_file.writeData(job.output_file, block);
+                return (&[_]ColumnData{{}})[0..];
+            }}
+        """
+
+    def explain(self, lvl: int = 0) -> None:
+        indent = "  " * lvl + ("+- " if lvl > 0 else "")
+        print(  # noqa: T201
+            f"{indent} WriteToLocalFileTask():{nice_schema(self.inferred_schema)}",
         )
         self.parent_task.explain(lvl + 1)
 

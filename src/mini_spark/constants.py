@@ -29,6 +29,22 @@ class ColumnType(Enum):
             return ColumnType.STRING
         return ColumnType.UNKNOWN
 
+    @property
+    def native_zig_type(self) -> str:
+        if self == ColumnType.INTEGER:
+            return "i32"
+        if self == ColumnType.STRING:
+            return "[]const u8"
+        raise NotImplementedError(self)
+
+    @property
+    def zig_type(self) -> str:
+        if self == ColumnType.INTEGER:
+            return "I32"
+        if self == ColumnType.STRING:
+            return "Str"
+        raise NotImplementedError(self)
+
 
 ColumnTypePython = int | str
 GLOBAL_TEMP_FOLDER = Path("tmp/")

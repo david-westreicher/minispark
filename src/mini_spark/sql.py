@@ -66,7 +66,7 @@ class Col:
             None,
         )
         if col_type is None:
-            raise ValueError(f"Column {self.name} not found in schema {schema}")
+            raise ValueError(f'Column "{self.name}" not found in schema {schema}')
         return col_type
 
     def schema_executor(self, schema: Schema) -> Col:
@@ -77,6 +77,60 @@ class Col:
         if col_pos is None:
             raise ValueError(f"Column {self.name} not found in schema {schema}")
         return SchemaCol(self.name, col_pos)
+
+    def generate_zig_projection_function(self, function_name: str, schema: Schema) -> str:
+        output_type = self.infer_type(schema)
+        referenced_columns = {col.name for col in self.all_nested_columns}
+        used_columns = [
+            (col_name, col_type, col_pos)
+            for col_pos, (col_name, col_type) in enumerate(schema)
+            if col_name in referenced_columns
+        ]
+        column_references = "\n".join(
+            [f"const col_{name} = input[{col_pos}].{col_type.zig_type};" for name, col_type, col_pos in used_columns]
+        )
+        column_name_list = ",".join(f"col_{name}" for name, _, _ in used_columns)
+        return f"""
+            pub fn {function_name}(
+                allocator: std.mem.Allocator,
+                input: []const ColumnData,
+                output: []{output_type.native_zig_type}) !ColumnData {{
+                _ = allocator;
+                {column_references}
+                for ({column_name_list}, 0..) |{",".join(name for name, _, _ in used_columns)}, _idx| {{
+                    output[_idx] = {self.zig_code_representation()};
+                }}
+                const const_out = output;
+                return ColumnData{{ .{output_type.zig_type} = const_out }};
+            }}
+        """
+
+    def generate_zig_condition_function(self, function_name: str, schema: Schema) -> str:
+        referenced_columns = {col.name for col in self.all_nested_columns}
+        used_columns = [
+            (col_name, col_type, col_pos)
+            for col_pos, (col_name, col_type) in enumerate(schema)
+            if col_name in referenced_columns
+        ]
+        column_references = "\n".join(
+            [f"const col_{name} = input[{col_pos}].{col_type.zig_type};" for name, col_type, col_pos in used_columns]
+        )
+        column_name_list = ",".join(f"col_{name}" for name, _, _ in used_columns)
+        return f"""
+            pub fn {function_name}(
+                allocator: std.mem.Allocator,
+                input: []const ColumnData,
+                output: []bool) void {{
+                _ = allocator;
+                {column_references}
+                for ({column_name_list}, 0..) |{",".join(name for name, _, _ in used_columns)}, _idx| {{
+                    output[_idx] = {self.zig_code_representation()};
+                }}
+            }}
+        """
+
+    def zig_code_representation(self) -> str:
+        return self.name
 
     def __str__(self) -> str:
         return self.name
@@ -119,6 +173,9 @@ class AliasColumn(Col):
 
     def schema_executor(self, schema: Schema) -> Col:
         return self.original_col.schema_executor(schema)
+
+    def zig_code_representation(self) -> str:
+        return self.original_col.zig_code_representation()
 
 
 OP_SYMBOLS = {
@@ -185,6 +242,12 @@ class BinaryOperatorColumn(Col):
             self.operator,
         )
 
+    def zig_code_representation(self) -> str:
+        return (
+            f"({self.left_side.zig_code_representation()}) {OP_SYMBOLS[self.operator]}"
+            f" ({self.right_side.zig_code_representation()})"
+        )
+
 
 @dataclass
 class Lit(Col):
@@ -211,3 +274,6 @@ class Lit(Col):
 
     def schema_executor(self, schema: Schema) -> Col:  # noqa: ARG002
         return self
+
+    def zig_code_representation(self) -> str:
+        return repr(self.value)

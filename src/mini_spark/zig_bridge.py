@@ -1,15 +1,11 @@
 import subprocess
 from pathlib import Path
 
-from .constants import ColumnType, Schema
+from .constants import Schema
 from .tasks import Task
 
-ZIG_TYPE = {
-    ColumnType.INTEGER: "I32",
-    ColumnType.STRING: "STR",
-}
-
 STAGES_FILE = Path("zig-src/src/stage.zig")
+STAGES_BINARY_OUTPUT = Path("zig-src/zig-out/bin/executor")
 
 
 class CompileError(Exception):
@@ -17,7 +13,7 @@ class CompileError(Exception):
         super().__init__(message)
 
 
-def compile_stages(stages: list[Task]) -> None:
+def compile_stages(stages: list[Task]) -> Path:
     code_buffer = [
         'const std = @import("std");',
         'const Executor = @import("executor");',
@@ -48,6 +44,8 @@ def compile_stages(stages: list[Task]) -> None:
     )
     if result.stderr:
         raise CompileError(result.stderr)
+    # TODO(david): strip binary to cut down size
+    return STAGES_BINARY_OUTPUT
 
 
 def compile_stage(task_chain: list[Task], stage_num: int) -> list[str]:
@@ -59,7 +57,7 @@ def compile_stage(task_chain: list[Task], stage_num: int) -> list[str]:
         schema_code = [
             "(&[_]ColumnSchema{",
             *[
-                f'.{{ .typ = Executor.TYPE_{ZIG_TYPE[col_type]}, .name = "{col_name}" }},'
+                f'.{{ .typ = Executor.TYPE_{col_type.zig_type.upper()}, .name = "{col_name}" }},'
                 for col_name, col_type in schema
             ],
             "})[0..];",
