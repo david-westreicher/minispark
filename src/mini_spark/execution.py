@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 from collections.abc import Iterable
 from contextlib import AbstractContextManager
@@ -26,6 +27,7 @@ from .utils import (
     TRACER,
     chunk_list,
     trace,
+    trace_yield,
 )
 
 if TYPE_CHECKING:
@@ -42,7 +44,8 @@ class JobResults:
 
 class ExecutionEngine(Protocol):
     def execute_full_task(self, full_task: Task) -> list[JobResults]: ...
-    def collect_results(self, results: list[JobResults]) -> Iterable[Row]: ...
+    def collect_results(self, results: list[JobResults], limit: int = -1) -> Iterable[Row]: ...
+    def cleanup(self) -> None: ...
 
 
 def split_into_stages(root_task: Task) -> Iterable[Task]:
@@ -97,6 +100,9 @@ class Executor(Service):  # type:ignore[misc]
     def execute_jobs(self, stage: Task, jobs: list[Job]) -> JobResults:
         raise NotImplementedError
 
+    def cleanup(self) -> None:
+        raise NotImplementedError
+
 
 class Driver:
     def __init__(self) -> None:
@@ -144,7 +150,7 @@ class DistributedExecutionEngine(AbstractContextManager["DistributedExecutionEng
         # collect traces
         return self.driver.execute_jobs_on_nodes(full_task, [Job(full_task) for _ in range(4)])
 
-    def collect_results(self, results: list[JobResults]) -> Iterable[Row]:
+    def collect_results(self, results: list[JobResults], limit: int = -1) -> Iterable[Row]:
         raise NotImplementedError
 
     def __exit__(
@@ -160,8 +166,13 @@ class PythonExecutionEngine(ExecutionEngine):
     def __init__(self) -> None:
         self.shuffle_files_to_delete: set[Path] = set()
 
+    @trace("execute full task")
     def execute_full_task(self, full_task: Task) -> list[JobResults]:
+        print("#" * 100)  # noqa: T201
+        print("Logical Plan")  # noqa: T201
+        full_task.explain()
         final_result_file = GLOBAL_TEMP_FOLDER / "result.bin"
+        final_result_file.unlink(missing_ok=True)
         full_task = WriteToLocalFileTask(full_task, file_path=final_result_file)
         Analyzer.analyze(full_task)
         stages = list(reversed(list(split_into_stages(full_task))))
@@ -172,6 +183,7 @@ class PythonExecutionEngine(ExecutionEngine):
             print("#" * 100)  # noqa: T201
             print("Stage", i)  # noqa: T201
             TRACER.start(f"Stage {i}")
+            stage.explain()
             self.execute_stage(stage, i)
             TRACER.end()
         TRACER.end()
@@ -179,7 +191,6 @@ class PythonExecutionEngine(ExecutionEngine):
 
     def execute_stage(self, stage: Task, stage_num: int) -> list[JobResults]:
         assert stage.inferred_schema is not None
-        stage.explain()
 
         TRACER.start("Create jobs")
         jobs = list(stage.create_jobs(stage, 1))
@@ -195,17 +206,22 @@ class PythonExecutionEngine(ExecutionEngine):
             TRACER.end()
         return []
 
-    def collect_results(self, results: list[JobResults]) -> Iterable[Row]:
+    @trace_yield("collect results")
+    def collect_results(self, results: list[JobResults], limit: int = math.inf) -> Iterable[Row]:  # type:ignore[assignment]
         for job_result in results:
             for file in job_result.result_files:
-                yield from BlockFile(file).read_data_rows()
+                for row in BlockFile(file).read_data_rows():
+                    yield row
+                    limit -= 1
+                    if limit <= 0:
+                        return
 
+    @trace("remove files")
     def cleanup(self) -> None:
-        TRACER.start("remove files")
         for shuffle_file in self.shuffle_files_to_delete:
             shuffle_file.unlink(missing_ok=True)
-        self.shuffle_files_to_delete.clear()
-        TRACER.end()
+        final_result_file = GLOBAL_TEMP_FOLDER / "result.bin"
+        final_result_file.unlink(missing_ok=True)
         self.shuffle_files_to_delete.clear()
 
 

@@ -5,3 +5,5 @@ myproject.egg-info
 *.pftrace
 zig-out
 .zig-cache
+zig-src/src/stage.zig
+check.sh

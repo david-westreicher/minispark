@@ -122,6 +122,21 @@ def trace(block_name: str) -> Callable[[F], F]:
     return decorator
 
 
+def trace_yield(block_name: str) -> Callable[[F], F]:
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):  # type: ignore[no-untyped-def] # noqa: ANN002, ANN003, ANN202
+            TRACER.start(block_name)
+            try:
+                yield from func(*args, **kwargs)
+            finally:
+                TRACER.end()
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorator
+
+
 def collect_and_trace_worker_traces(worker_count: int) -> None:
     for worker_id in range(worker_count):
         worker_trace_file = Path(f"worker-{worker_id}.pftrace")

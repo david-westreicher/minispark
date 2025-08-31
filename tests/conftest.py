@@ -16,7 +16,7 @@ def setup_function(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("mini_spark.constants.SHUFFLE_FOLDER", shuffle_folder)
     monkeypatch.setattr("mini_spark.tasks.SHUFFLE_FOLDER", shuffle_folder)
     monkeypatch.setattr("mini_spark.utils.GLOBAL_TEMP_FOLDER", tmp_path / "tmp")
-    monkeypatch.setattr("mini_spark.query.GLOBAL_TEMP_FOLDER", tmp_path / "tmp")
+    monkeypatch.setattr("mini_spark.execution.GLOBAL_TEMP_FOLDER", tmp_path / "tmp")
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +24,7 @@ def patch_tracer(monkeypatch: pytest.MonkeyPatch):
     mock_tracer = MagicMock()
     utils.TRACER.unregister()
     monkeypatch.setattr("mini_spark.utils.TRACER", mock_tracer)
-    monkeypatch.setattr("mini_spark.query.TRACER", mock_tracer)
+    monkeypatch.setattr("mini_spark.execution.TRACER", mock_tracer)
     return mock_tracer
 
 

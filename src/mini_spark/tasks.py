@@ -543,6 +543,8 @@ class ShuffleToFileTask(Task):
         unknown_cols = [col for col in referenced_column_names if col not in schema_cols]
         if unknown_cols:
             raise ValueError(f"Unknown columns in GroupBy: {unknown_cols}")
+        if self.key_column.name in schema_cols:
+            return schema
         return [(self.key_column.name, self.key_column.infer_type(schema)), *schema]
 
     def explain(self, lvl: int = 0) -> None:

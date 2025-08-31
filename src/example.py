@@ -8,16 +8,14 @@ BlockFile(Path("fruit_color.bin")).write_rows(
     [
         {"id": "apple", "color": "red"},
         {"id": "banana", "color": "yellow"},
-    ],
+    ]
+    * 1000,
 )
 BlockFile(Path("fruit_count.bin")).write_rows(
-    [
-        {"id": "apple", "count": 3},
-        {"id": "banana", "count": 4},
-    ],
+    [{"id": fruit, "count": i} for i in range(100) for fruit in ["apple", "banana"]]
 )
 colors = DataFrame().table("fruit_color.bin").select(Col("id").alias("color_id"), Col("color"))
 colors.show()
 counts = DataFrame().table("fruit_count.bin").select(Col("id").alias("count_id"), Col("count"))
 counts.show()
-colors.join(counts, on=Col("color_id") == Col("count_id"), how="inner").show()
+colors.join(counts, on=Col("color_id") == Col("count_id"), how="inner").show(n=20)

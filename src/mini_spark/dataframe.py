@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
-from .query import ExecutionEngine, PythonExecutionEngine
+from .execution import ExecutionEngine, PythonExecutionEngine
 from .sql import BinaryOperatorColumn, Col
 from .tasks import (
     CountTask,
@@ -72,20 +72,18 @@ class DataFrame:
         return self
 
     def collect(self) -> list[Row]:
-        results = self.engine.execute_full_task(self.task)
-        return list(self.engine.collect_results(results))
+        job_results = self.engine.execute_full_task(self.task)
+        result = list(self.engine.collect_results(job_results))
+        self.engine.cleanup()
+        return result
 
     def show(self, n: int = 10) -> None:
         results = self.engine.execute_full_task(self.task)
         first = True
-        row_results = iter(self.engine.collect_results(results))
-        while n > 0:
-            try:
-                row = next(row_results)
-            except StopIteration:
-                break
+        for row in self.engine.collect_results(results, limit=n):
             if first:
                 print("|" + ("|".join(f"{col:<10}" for col in row)) + "|")  # noqa: T201
                 print("|" + ("+".join("-" * 10 for _ in row)) + "|")  # noqa: T201
                 first = False
             print("|" + ("|".join(f"{v:<10}" for v in row.values())) + "|")  # noqa: T201
+        self.engine.cleanup()
