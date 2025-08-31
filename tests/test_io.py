@@ -16,7 +16,7 @@ def test_serialize_deserialize_schema(temporary_file: Path):
 
     # act
     block_file = BlockFile(temporary_file)
-    block_file.write_data([], schema)
+    block_file.write_tuples([], schema)
     deserialized_schema = _deserialize_schema(temporary_file.open("rb"))
 
     # assert
@@ -36,7 +36,7 @@ def test_serialize_deserialize_data(temporary_file: Path):
 
     # act
     block_file = BlockFile(temporary_file)
-    block_file.write_data(data, schema)
+    block_file.write_tuples(data, schema)
     deserialized_schema = block_file.file_schema
     all_data = list(block_file.read_data())
 
@@ -62,8 +62,8 @@ def test_serialize_append_deserialize_data(temporary_file: Path):
 
     # act
     block_file = BlockFile(temporary_file)
-    block_file.write_data(data, schema)
-    block_file.append_data(new_data)
+    block_file.write_tuples(data, schema)
+    block_file.append_tuples(new_data)
     deserialized_schema = block_file.file_schema
     all_data = list(block_file.read_data())
 

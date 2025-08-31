@@ -525,7 +525,7 @@ class ShuffleToFileTask(Task):
                 SHUFFLE_FOLDER / f"{job.current_stage}_{job.worker_id}_{partition}.bin",
             )
             data_in_rows = list(zip(*full_data, strict=True))
-            BlockFile(shuffle_file).append_data(
+            BlockFile(shuffle_file).append_tuples(
                 data_in_rows,
                 self.parent_task.inferred_schema,
             )
@@ -553,15 +553,16 @@ class ShuffleToFileTask(Task):
         self.parent_task.explain(lvl + 1)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class WriteToLocalFileTask(Task):
+    file_path: Path
+
     @trace("WriteToLocalFileTask")
-    def execute(self, input_columns: Columns, job: Job) -> Columns:
-        assert type(job) is WriteToLocalFileJob
-        BlockFile(job.local_file).append_data(
-            [input_columns],
-            self.parent_task.inferred_schema,
-        )
+    def execute(self, input_columns: Columns, job: Job) -> Columns:  # noqa: ARG002
+        assert self.parent_task.inferred_schema is not None
+        if len(input_columns) == 0 or len(input_columns[0]) == 0:
+            return ()
+        BlockFile(self.file_path, schema=self.parent_task.inferred_schema).append_data(input_columns)
         return ()
 
     def generate_zig_code(self, function_name: str) -> str:
@@ -570,7 +571,8 @@ class WriteToLocalFileTask(Task):
             pub fn {function_name}(
                 allocator: std.mem.Allocator,
                 input: []const ColumnData,
-                job: Job, schema: []const ColumnSchema) ![]const ColumnData {{
+                job: Job,
+                schema: []const ColumnSchema) ![]const ColumnData {{
                 var block_file = try Executor.BlockFile.init(allocator, schema);
                 const block = Executor.Block{{ .cols = input }};
                 try block_file.writeData(job.output_file, block);

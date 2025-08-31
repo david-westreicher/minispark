@@ -16,6 +16,7 @@ def setup_function(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("mini_spark.constants.SHUFFLE_FOLDER", shuffle_folder)
     monkeypatch.setattr("mini_spark.tasks.SHUFFLE_FOLDER", shuffle_folder)
     monkeypatch.setattr("mini_spark.utils.GLOBAL_TEMP_FOLDER", tmp_path / "tmp")
+    monkeypatch.setattr("mini_spark.query.GLOBAL_TEMP_FOLDER", tmp_path / "tmp")
 
 
 @pytest.fixture(autouse=True)

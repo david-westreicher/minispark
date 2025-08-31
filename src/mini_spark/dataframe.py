@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
-import rpyc
-from rpyc import Connection, OneShotServer, Service
-
-from .query import TaskExecutor
+from .query import ExecutionEngine, PythonExecutionEngine
 from .sql import BinaryOperatorColumn, Col
 from .tasks import (
     CountTask,
     FilterTask,
-    Job,
     JoinTask,
     JoinType,
     LoadShuffleFileTask,
@@ -22,7 +17,6 @@ from .tasks import (
     Task,
     VoidTask,
 )
-from .utils import chunk_list
 
 if TYPE_CHECKING:
     from .constants import Row, Schema
@@ -40,96 +34,18 @@ class GroupedData:
         return self.df
 
 
-@dataclass
-class JobResults:
-    pass
-
-
-class Executor(Service):  # type:ignore[misc]
-    def __init__(self, port: int) -> None:
-        self.id = port
-        server = OneShotServer(self, port=port)
-        server.start()  # blocks until driver disconnected
-
-    def on_connect(self, conn: Connection) -> None:
-        print("executor: driver connected", conn)  # noqa: T201
-
-    def on_disconnect(self, conn: Connection) -> None:
-        print("executor: driver disconnected", conn)  # noqa: T201
-
-    def exposed_get_file_content(self, file_name: str) -> bytes:
-        executor_file = Path("executors") / str(self.id) / file_name
-        with executor_file.open("rb") as f:
-            return f.read()
-
-    def exposed_execute_jobs(self, stage: Task, jobs: list[Job]) -> JobResults:
-        print("executing job on executor", stage, jobs)  # noqa: T201
-        # TODO(david): process all jobs paralelly -> thread pool, give sysargs with job info
-        return JobResults()
-
-    def execute_jobs(self, stage: Task, jobs: list[Job]) -> JobResults:
-        raise NotImplementedError
-
-
-class Driver:
-    def __init__(self) -> None:
-        self.executors: list[Executor] = []
-
-    def add_executor(self, host: str, port: int) -> None:
-        connection = rpyc.connect(host, port)
-        self.executors.append(connection.root)
-
-    def execute_jobs_on_nodes(self, stage: Task, jobs: list[Job]) -> list[JobResults]:
-        # TODO(david): this should be execute_task(full_task)
-        # fulltask analyze
-        # fulltask optimize
-        # compile into zig binary
-        # send binary to executors
-        # wait
-        # split task into stages
-        # for each stage:
-        #   generate jobs
-        #   distribute jobs to executors
-        #   collect job results for next stages
-        # collect results from last stage (via jobresults)
-        # collect traces
-        async_calls = []
-        for executor, job_chunk in zip(self.executors, chunk_list(jobs, len(self.executors)), strict=True):
-            remote_execute = rpyc.async_(executor.exposed_execute_jobs)
-            async_calls.append(remote_execute(stage, job_chunk))
-        return [async_call.value for async_call in async_calls]  # block until all nodes are finished
-
-
-class MiniSpark:
-    @staticmethod
-    def create(executors: int = 1, workers_per_executor: int = 1) -> None:
-        # create drivers and workers
-        pass
-
-
 class DataFrame:
-    def __init__(self) -> None:
+    def __init__(self, engine: ExecutionEngine | None = None) -> None:
+        self.engine = engine if engine is not None else PythonExecutionEngine()
         self.task: Task = VoidTask()
-
-    def table(self, file_path: str) -> Self:
-        self.task = LoadTableTask(self.task, file_path=Path(file_path))
-        return self
-
-    def collect(self) -> list[Row]:
-        return list(TaskExecutor(self.task).execute())
-
-    def show(self, n: int = 10) -> None:
-        first = True
-        for row in TaskExecutor(self.task).execute(limit=n):
-            if first:
-                print("|" + ("|".join(f"{col:<10}" for col in row)) + "|")  # noqa: T201
-                print("|" + ("+".join("-" * 10 for _ in row)) + "|")  # noqa: T201
-                first = False
-            print("|" + ("|".join(f"{v:<10}" for v in row.values())) + "|")  # noqa: T201
 
     @property
     def schema(self) -> Schema:
         return self.task.validate_schema()
+
+    def table(self, file_path: str) -> Self:
+        self.task = LoadTableTask(self.task, file_path=Path(file_path))
+        return self
 
     def select(self, *columns: Col) -> Self:
         self.task = ProjectTask(self.task, columns=list(columns))
@@ -154,3 +70,22 @@ class DataFrame:
             how=how,
         )
         return self
+
+    def collect(self) -> list[Row]:
+        results = self.engine.execute_full_task(self.task)
+        return list(self.engine.collect_results(results))
+
+    def show(self, n: int = 10) -> None:
+        results = self.engine.execute_full_task(self.task)
+        first = True
+        row_results = iter(self.engine.collect_results(results))
+        while n > 0:
+            try:
+                row = next(row_results)
+            except StopIteration:
+                break
+            if first:
+                print("|" + ("|".join(f"{col:<10}" for col in row)) + "|")  # noqa: T201
+                print("|" + ("+".join("-" * 10 for _ in row)) + "|")  # noqa: T201
+                first = False
+            print("|" + ("|".join(f"{v:<10}" for v in row.values())) + "|")  # noqa: T201

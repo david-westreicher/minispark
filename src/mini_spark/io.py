@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, BinaryIO, Self
 
 from . import constants
 from .constants import Columns, ColumnType, Row, Schema
+from .utils import convert_columns_to_rows
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -175,7 +176,7 @@ class BlockFile:
         with self.file.open("rb") as f:
             return _deserialize_schema(f)
 
-    def write_data(self, data: list[tuple[Any, ...]], schema: Schema | None = None) -> Self:
+    def write_tuples(self, data: list[tuple[Any, ...]], schema: Schema | None = None) -> Self:
         if not schema:
             first_row = data[0]
             schema = [(f"col_{i}", ColumnType.of(value)) for i, value in enumerate(first_row)]
@@ -200,9 +201,14 @@ class BlockFile:
             f.write(to_unsigned_int(len(block_starts)))
         return self
 
-    def append_data(self, data: list[tuple[Any, ...]], schema: Schema | None = None) -> Self:
+    def append_data(self, data: Columns) -> Self:
+        assert self.schema
+        rows = list(convert_columns_to_rows(data, self.schema))
+        return self.append_rows(rows)
+
+    def append_tuples(self, data: list[tuple[Any, ...]], schema: Schema | None = None) -> Self:
         if not self.file.exists():
-            self.write_data(data, schema)
+            self.write_tuples(data, schema)
             return self
         schema = self.file_schema
         block_starts = self.block_starts
@@ -222,7 +228,7 @@ class BlockFile:
             return self
         schema = self.file_schema
         data_tuples = [tuple(row[col_name] for col_name, _ in schema) for row in data]
-        return self.append_data(data_tuples)
+        return self.append_tuples(data_tuples)
 
     def read_data(self) -> Iterable[tuple[Any, ...]]:
         schema = self.file_schema
