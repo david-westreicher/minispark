@@ -12,10 +12,12 @@ if not FRUIT_FILE.exists():
     )
 
 with DistributedExecutionEngine() as engine:
+    # without engine: 98 secs
+    # with engine: 1 secs
     counts = (
         DataFrame(engine)
         .table(str(FRUIT_FILE))
-        .select(Col("id").alias("count_id"), ((Col("count") + 3 - 2) * 5).alias("count"))
-        .filter((Col("count") % 1000) == 0)
+        .select(Col("id"), ((Col("count") + 3 - 2) * 5).alias("count"))
+        .filter(((Col("count") % 10_000_000) == 0) & (Col("id") == "apple"))
     )
-    counts.show()
+    counts.show(n=100)

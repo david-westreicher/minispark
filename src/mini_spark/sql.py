@@ -32,6 +32,12 @@ class Col:
     def __add__(self, other: Col | ColumnTypePython) -> Col:
         return BinaryOperatorColumn(self, cast("Col", other), operator.add)
 
+    def __and__(self, other: Col | ColumnTypePython) -> Col:
+        return BinaryOperatorColumn(self, cast("Col", other), operator.and_)
+
+    def __or__(self, other: Col | ColumnTypePython) -> Col:
+        return BinaryOperatorColumn(self, cast("Col", other), operator.or_)
+
     def __sub__(self, other: Col | ColumnTypePython) -> Col:
         return BinaryOperatorColumn(self, cast("Col", other), operator.sub)
 
@@ -101,7 +107,7 @@ class Col:
                 _ = allocator;
                 {column_references}
                 for ({column_name_list}, 0..) |{",".join(name for name, _, _ in used_columns)}, _idx| {{
-                    output[_idx] = {self.zig_code_representation()};
+                    output[_idx] = {self.zig_code_representation(schema)};
                 }}
                 const const_out = output;
                 return ColumnData{{ .{output_type.zig_type} = const_out }};
@@ -127,12 +133,12 @@ class Col:
                 _ = allocator;
                 {column_references}
                 for ({column_name_list}, 0..) |{",".join(name for name, _, _ in used_columns)}, _idx| {{
-                    output[_idx] = {self.zig_code_representation()};
+                    output[_idx] = {self.zig_code_representation(schema)};
                 }}
             }}
         """
 
-    def zig_code_representation(self) -> str:
+    def zig_code_representation(self, schema: Schema) -> str:  # noqa: ARG002
         return self.name
 
     def __str__(self) -> str:
@@ -189,8 +195,8 @@ class AliasColumn(Col):
     def schema_executor(self, schema: Schema) -> Col:
         return self.original_col.schema_executor(schema)
 
-    def zig_code_representation(self) -> str:
-        return self.original_col.zig_code_representation()
+    def zig_code_representation(self, schema: Schema) -> str:
+        return self.original_col.zig_code_representation(schema)
 
 
 OP_SYMBOLS = {
@@ -207,6 +213,8 @@ OP_SYMBOLS = {
     operator.le: "<=",
     operator.gt: ">",
     operator.ge: ">=",
+    operator.and_: "and",
+    operator.or_: "or",
 }
 
 
@@ -263,12 +271,26 @@ class BinaryOperatorColumn(Col):
             self.operator,
         )
 
-    def zig_code_representation(self) -> str:
+    def zig_code_representation(self, schema: Schema) -> str:
+        if self.operator == operator.eq:
+            left_type = self.left_side.infer_type(schema)
+            right_type = self.left_side.infer_type(schema)
+            assert left_type == right_type
+            if left_type == ColumnType.STRING:
+                return (
+                    f"std.mem.eql(u8, "
+                    f"({self.left_side.zig_code_representation(schema)}),"
+                    f" ({self.right_side.zig_code_representation(schema)}))"
+                )
         if self.operator == operator.mod:
-            return f"@rem(({self.left_side.zig_code_representation()}), ({self.right_side.zig_code_representation()}))"
+            return (
+                "@rem("
+                f"({self.left_side.zig_code_representation(schema)}),"
+                f" ({self.right_side.zig_code_representation(schema)}))"
+            )
         return (
-            f"({self.left_side.zig_code_representation()}) {OP_SYMBOLS[self.operator]}"
-            f" ({self.right_side.zig_code_representation()})"
+            f"({self.left_side.zig_code_representation(schema)}) {OP_SYMBOLS[self.operator]}"
+            f" ({self.right_side.zig_code_representation(schema)})"
         )
 
 
@@ -304,5 +326,9 @@ class Lit(Col):
     def schema_executor(self, schema: Schema) -> Col:  # noqa: ARG002
         return self
 
-    def zig_code_representation(self) -> str:
-        return repr(self.value)
+    def zig_code_representation(self, schema: Schema) -> str:  # noqa: ARG002
+        if type(self.value) is int:
+            return str(self.value)
+        if type(self.value) is str:
+            return f'"{self.value}"'
+        raise NotImplementedError(f"Zig code generation for literal {self.value} not implemented")
