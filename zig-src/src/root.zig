@@ -10,14 +10,69 @@ pub const Error = error{
     UnknownType,
 };
 
+pub const TraceEvent = struct {
+    name: []const u8,
+    time: u64,
+    is_start: bool,
+};
+
+pub const Tracer = struct {
+    allocator: std.mem.Allocator,
+    timer: std.time.Timer,
+    events: std.ArrayList(TraceEvent),
+
+    pub fn init(allocator: std.mem.Allocator) !Tracer {
+        return Tracer{
+            .allocator = allocator,
+            .timer = try std.time.Timer.start(),
+            .events = try std.ArrayList(TraceEvent).initCapacity(allocator, 100),
+        };
+    }
+
+    pub fn startEvent(self: *Tracer, name: []const u8) !void {
+        try self.events.append(self.allocator, TraceEvent{
+            .name = name,
+            .time = self.timer.read(),
+            .is_start = true,
+        });
+    }
+
+    pub fn endEvent(self: *Tracer, name: []const u8) !void {
+        try self.events.append(self.allocator, TraceEvent{
+            .name = name,
+            .time = self.timer.read(),
+            .is_start = false,
+        });
+    }
+
+    pub fn save(self: *Tracer, file_path: []const u8) !void {
+        const fs = std.fs.cwd();
+        var file = try fs.createFile(file_path, .{ .truncate = true });
+        defer file.close();
+
+        for (self.events.items) |event| {
+            const event_type: u8 = if (event.is_start) 0 else 1;
+            try file.writeAll(&[_]u8{event_type});
+            try file.writeAll(std.mem.asBytes(&event.time));
+            const name_len: u8 = @intCast(event.name.len);
+            try file.writeAll(&[_]u8{name_len});
+            try file.writeAll(event.name);
+        }
+        return;
+    }
+};
+
+pub var GLOBAL_TRACER: Tracer = undefined;
+
 pub const Job = struct {
     stage_id: u32 = 0,
     input_file: []const u8,
     input_block_id: u32,
     output_file: []const u8,
+    trace_file: []const u8,
 
     pub fn fromArgs(it: *std.process.ArgIterator) !Job {
-        var args: [4][]const u8 = undefined; // we need exactly 3 arguments
+        var args: [5][]const u8 = undefined; // we need exactly 3 arguments
         var idx: usize = 0;
 
         while (it.next()) |arg| {
@@ -25,18 +80,19 @@ pub const Job = struct {
                 idx += 1;
                 continue;
             }
-            if (idx > 4) break; // ignore extra args
+            if (idx > 5) break; // ignore extra args
             args[idx - 1] = arg;
             idx += 1;
         }
 
-        if (idx - 1 != 4) return error.InvalidArgs;
+        if (idx - 1 != 5) return error.InvalidArgs;
 
         return Job{
             .stage_id = try std.fmt.parseInt(u32, args[0], 10),
             .input_file = args[1],
             .input_block_id = try std.fmt.parseInt(u32, args[2], 10),
             .output_file = args[3],
+            .trace_file = args[4],
         };
     }
 };

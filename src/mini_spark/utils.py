@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import atexit
 import functools
-import pickle
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from multiprocessing import Queue
 from pathlib import Path
+from queue import Empty
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import TrackEvent
-from perfetto.trace_builder.proto_builder import TraceProtoBuilder
+from perfetto.trace_builder.proto_builder import TracePacket, TraceProtoBuilder
 
 from .constants import GLOBAL_TEMP_FOLDER, Columns, Row, Schema
 
@@ -40,15 +41,48 @@ def convert_rows_to_columns(rows: Iterable[Row], schema: Schema) -> Columns:
     return tuple([row[col] for row in rows] for col, _ in schema)
 
 
+@dataclass
+class TraceEvent:
+    name: str
+    timestamp: int
+    is_start: bool
+
+    def set_packet(self, packet: TracePacket, track_uuid: int = -1) -> None:
+        packet.timestamp = self.timestamp
+        packet.track_event.type = TrackEvent.TYPE_SLICE_BEGIN if self.is_start else TrackEvent.TYPE_SLICE_END
+        packet.track_event.track_uuid = MAIN_SYSTEM_TRACK_UUID if track_uuid == -1 else track_uuid
+        packet.trusted_packet_sequence_id = TRUSTED_PACKET_SEQUENCE_ID
+        if self.is_start:
+            packet.track_event.name = self.name
+
+
+@dataclass
+class TraceFile:
+    timestamp: int
+    trace_file: Path
+    worker_id: str
+
+    def parse(self) -> Iterable[TraceEvent]:
+        try:
+            with self.trace_file.open("rb") as f:
+                while True:
+                    is_start = int(f.read(1)[0])
+                    timestamp = int.from_bytes(f.read(8), byteorder="little", signed=False)
+                    name_len = int(f.read(1)[0])
+                    name = f.read(name_len).decode("utf-8")
+                    yield TraceEvent(name, timestamp + self.timestamp, is_start == 0)
+        except (EOFError, IndexError):
+            pass
+
+
+TRACE_FILES: Queue[TraceFile] = Queue()
+
+
 class Tracer:
     def __init__(self) -> None:
         self.trace_proto = TraceProtoBuilder()
         self.tracks: set[int] = set()
         self.define_custom_track(MAIN_SYSTEM_TRACK_UUID, "Main System")
-        atexit.register(self.save, "current.pftrace")
-
-    def unregister(self) -> None:
-        atexit.unregister(self.save)
 
     def define_custom_track(self, track_uuid: int, name: str, parent_track_uuid: int | None = None) -> None:
         if track_uuid in self.tracks:
@@ -76,34 +110,21 @@ class Tracer:
         packet.track_event.track_uuid = MAIN_SYSTEM_TRACK_UUID if track_uuid == -1 else track_uuid
         packet.trusted_packet_sequence_id = TRUSTED_PACKET_SEQUENCE_ID
 
+    def add_trace_file(self, trace_file: Path, worker_id: str) -> None:
+        TRACE_FILES.put(TraceFile(time.time_ns(), trace_file, worker_id))
+
     def save(self, filename: str) -> None:
+        try:
+            while trace_file := TRACE_FILES.get(timeout=0.1):
+                track_uuid = hash(trace_file.worker_id) % 100000 + 1000
+                self.define_custom_track(track_uuid, f"Worker {trace_file.worker_id}")
+                for event in trace_file.parse():
+                    event.set_packet(self.trace_proto.add_packet(), track_uuid)
+        except Empty:
+            pass
+
         with Path(filename).open("wb") as f:
             f.write(self.trace_proto.serialize())
-
-
-class MyTracer:
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    def start(self, name: str) -> None:
-        packet = {
-            "timestamp": time.time_ns(),
-            "track_event.type": TrackEvent.TYPE_SLICE_BEGIN,
-            "track_event.name": name,
-        }
-        self.events.append(packet)
-
-    def end(self) -> None:
-        packet = {
-            "timestamp": time.time_ns(),
-            "track_event.type": TrackEvent.TYPE_SLICE_END,
-        }
-        self.events.append(packet)
-
-    def save(self, filename: str) -> None:
-        if self.events:
-            with Path(filename).open("wb") as f:
-                pickle.dump(self.events, f)
 
 
 def trace(block_name: str) -> Callable[[F], F]:
@@ -135,30 +156,6 @@ def trace_yield(block_name: str) -> Callable[[F], F]:
         return wrapper  # type: ignore[return-value]
 
     return decorator
-
-
-def collect_and_trace_worker_traces(worker_count: int) -> None:
-    for worker_id in range(worker_count):
-        worker_trace_file = Path(f"worker-{worker_id}.pftrace")
-        try:
-            with worker_trace_file.open("rb") as f:
-                TRACER.define_custom_track(
-                    worker_id + 1,
-                    name=f"Worker {worker_id}",
-                    parent_track_uuid=MAIN_SYSTEM_TRACK_UUID,
-                )
-                events = pickle.load(f)  # TODO(david): don't use pickle  # noqa: S301
-                for event in events:
-                    packet = TRACER.trace_proto.add_packet()
-                    packet.timestamp = event["timestamp"]
-                    packet.track_event.type = event["track_event.type"]
-                    packet.track_event.track_uuid = worker_id + 1
-                    if "track_event.name" in event:
-                        packet.track_event.name = event["track_event.name"]
-                    packet.trusted_packet_sequence_id = TRUSTED_PACKET_SEQUENCE_ID
-            worker_trace_file.unlink()
-        except FileNotFoundError:
-            pass
 
 
 TRACER = Tracer()

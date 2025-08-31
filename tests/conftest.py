@@ -5,8 +5,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mini_spark import utils
-
 
 @pytest.fixture(autouse=True)
 def setup_function(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -22,7 +20,6 @@ def setup_function(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture(autouse=True)
 def patch_tracer(monkeypatch: pytest.MonkeyPatch):
     mock_tracer = MagicMock()
-    utils.TRACER.unregister()
     monkeypatch.setattr("mini_spark.utils.TRACER", mock_tracer)
     monkeypatch.setattr("mini_spark.execution.TRACER", mock_tracer)
     return mock_tracer

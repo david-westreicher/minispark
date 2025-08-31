@@ -7,3 +7,4 @@ zig-out
 .zig-cache
 zig-src/src/stage.zig
 check.sh
+executors/

@@ -165,10 +165,12 @@ class ProjectTask(Task):
             input: []const ColumnData,
             job: Job,
             schema: []const ColumnSchema) ![]const ColumnData {{
+            try Executor.GLOBAL_TRACER.startEvent("{function_name}");
             _ = job;
             _ = schema;
             const rows = input[0].len();
             {generate_projection_calls()}
+            try Executor.GLOBAL_TRACER.endEvent("{function_name}");
             return slice;
         }}
         """
@@ -215,10 +217,13 @@ class LoadTableTask(Task):
                 input: []const ColumnData,
                 job: Job,
                 schema: []const ColumnSchema) ![]const ColumnData {{
+                try Executor.GLOBAL_TRACER.startEvent("{function_name}");
                 _ = input;
                 _ = schema;
                 const block_file = try Executor.BlockFile.initFromFile(allocator, job.input_file);
-                return try block_file.readBlock(job.input_block_id);
+                const data = try block_file.readBlock(job.input_block_id);
+                try Executor.GLOBAL_TRACER.endEvent("{function_name}");
+                return data;
             }}
 
         """
@@ -315,6 +320,7 @@ class FilterTask(Task):
                 input: []const ColumnData,
                 job: Job,
                 schema: []const ColumnSchema) ![]const ColumnData {{
+                try Executor.GLOBAL_TRACER.startEvent("{function_name}");
                 _ = job;
                 _ = schema;
                 const rows = input[0].len();
@@ -325,6 +331,7 @@ class FilterTask(Task):
                     const filtered_column = try Executor.filter_column(col, condition_col, allocator);
                     slice[col_idx] = filtered_column;
                 }}
+                try Executor.GLOBAL_TRACER.endEvent("{function_name}");
                 return slice;
             }}
         """
@@ -575,9 +582,11 @@ class WriteToLocalFileTask(Task):
                 input: []const ColumnData,
                 job: Job,
                 schema: []const ColumnSchema) ![]const ColumnData {{
+                try Executor.GLOBAL_TRACER.startEvent("{function_name}");
                 var block_file = try Executor.BlockFile.init(allocator, schema);
                 const block = Executor.Block{{ .cols = input }};
                 try block_file.writeData(job.output_file, block);
+                try Executor.GLOBAL_TRACER.endEvent("{function_name}");
                 return (&[_]ColumnData{{}})[0..];
             }}
         """

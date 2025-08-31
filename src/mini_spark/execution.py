@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import multiprocessing
 import shutil
 import subprocess
 import threading
@@ -11,6 +12,7 @@ from dataclasses import dataclass, field
 from multiprocessing import Pool
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self
+from uuid import uuid4
 
 import rpyc
 from rpyc import Connection, OneShotServer, Service
@@ -56,6 +58,7 @@ class DistributedJob:
     input_block_id: int
     output_file: Path = Path()
     executor_binary: Path = Path()
+    id: str = ""
 
     def to_tuple(self) -> tuple[int, str, int, str]:
         return (self.stage_id, str(self.input_file), self.input_block_id, str(self.output_file))
@@ -99,6 +102,9 @@ def split_into_stages(root_task: Task) -> Iterable[Task]:
 
 def execute_job(job: DistributedJob) -> JobResults:
     print("executor: executing job", job)  # noqa: T201
+    worker_id = multiprocessing.current_process().name
+    trace_file = (job.executor_binary.parent / f"trace-{job.id}").absolute()
+    TRACER.add_trace_file(trace_file, worker_id)
     subprocess.call(  # noqa: S603
         [
             str(job.executor_binary),
@@ -106,6 +112,7 @@ def execute_job(job: DistributedJob) -> JobResults:
             str(job.input_file.absolute()),
             str(job.input_block_id),
             str(job.output_file.absolute()),
+            str(trace_file),
         ]
     )
     return JobResults(result_files=[job.output_file])
@@ -132,6 +139,7 @@ class Executor(Service):  # type:ignore[misc]
         self.worker_pool.close()
         shutil.rmtree(self.executor_path, ignore_errors=False)
         print("executor: files removed")  # noqa: T201
+        self.thread.join()
 
     def exposed_get_file_content(self, file_name: str) -> bytes:
         executor_file = Path("executors") / str(self.id) / file_name
@@ -143,6 +151,7 @@ class Executor(Service):  # type:ignore[misc]
         for job in parsed_jobs:
             job.output_file = self.executor_path / f"stage_{job.stage_id}_block_{job.input_block_id}.bin"
             job.executor_binary = self.executor_path / "executor_binary"
+            job.id = str(uuid4())
         worker_results = self.worker_pool.map(execute_job, parsed_jobs)
         return (
             self.id,

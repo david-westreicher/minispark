@@ -22,6 +22,7 @@ def compile_stages(stages: list[Task]) -> Path:
         'const ColumnData = @import("executor").ColumnData;',
         'const ColumnSchema = @import("executor").ColumnSchema;',
         'const Job = @import("executor").Job;',
+        'const Tracer = @import("executor").GLOBAL_TRACER;',
     ]
     for stage_num, stage in enumerate(stages):
         code_buffer.extend(compile_stage(list(stage.task_chain), stage_num))
@@ -91,8 +92,10 @@ def compile_stage(task_chain: list[Task], stage_num: int) -> list[str]:
 
     run_stage_code = f"""
         pub fn run_stage_{stage_num:0>2}(allocator: std.mem.Allocator, job: Job) !void {{
+            try Executor.GLOBAL_TRACER.startEvent("stage_{stage_num}");
             const last_input_00 = &[_]ColumnData{{}};
             {generate_task_calls()}
+            try Executor.GLOBAL_TRACER.endEvent("stage_{stage_num}");
         }}
     """
     generated_code.append(run_stage_code)

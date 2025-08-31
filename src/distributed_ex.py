@@ -4,6 +4,7 @@ from mini_spark.dataframe import DataFrame
 from mini_spark.execution import DistributedExecutionEngine
 from mini_spark.io import BlockFile
 from mini_spark.sql import Col
+from mini_spark.utils import TRACER
 
 FRUIT_FILE = Path("big_fruit_count.bin")
 if not FRUIT_FILE.exists():
@@ -21,3 +22,4 @@ with DistributedExecutionEngine() as engine:
         .filter(((Col("count") % 10_000_000) == 0) & (Col("id") == "apple"))
     )
     counts.show(n=100)
+    TRACER.save("trace.pftrace")
