@@ -286,7 +286,7 @@ class FilterTask(Task):
     condition: Col
 
     def __post_init__(self) -> None:
-        assert type(self.condition) is BinaryOperatorColumn
+        assert type(self.condition) is BinaryOperatorColumn, type(self.condition)
 
     @trace("FilterTask")
     def execute(self, input_columns: Columns, job: Job) -> Columns:  # noqa: ARG002

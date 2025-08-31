@@ -41,8 +41,14 @@ class Col:
     def __truediv__(self, other: Col | ColumnTypePython) -> Col:
         return BinaryOperatorColumn(self, cast("Col", other), operator.truediv)
 
+    def __mod__(self, other: Col | ColumnTypePython) -> Col:
+        return BinaryOperatorColumn(self, cast("Col", other), operator.mod)
+
     def __eq__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
         return BinaryOperatorColumn(self, cast("Col", other), operator.eq)
+
+    def __hash__(self) -> int:
+        return hash((self.__class__, self.name))
 
     def execute(self, row: dict[str, ColumnTypePython]) -> ColumnTypePython:
         return row[self.name]
@@ -52,9 +58,6 @@ class Col:
 
     def alias(self, name: str) -> Col:
         return AliasColumn(self, name)
-
-    def __hash__(self) -> int:
-        return hash((self.__class__, self.name))
 
     @property
     def all_nested_columns(self) -> Iterable[Col]:
@@ -142,6 +145,12 @@ class SchemaCol(Col):
         super().__init__(name)
         self.col_pos = col_pos
 
+    def __hash__(self) -> int:
+        return super().__hash__()
+
+    def __eq__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
+        return super().__eq__(other)
+
     def execute(self, row: dict[str, Any]) -> Any:  # noqa: ANN401
         raise NotImplementedError
 
@@ -153,6 +162,12 @@ class SchemaCol(Col):
 class AliasColumn(Col):
     original_col: Col
     name: str
+
+    def __eq__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
+        return super().__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash((self.__class__, hash(self.original_col), self.name))
 
     @property
     def all_nested_columns(self) -> Iterable[Col]:
@@ -201,6 +216,12 @@ class BinaryOperatorColumn(Col):
     right_side: Col
     operator: Callable[[Any, Any], Any]
 
+    def __eq__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
+        return super().__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash((self.__class__, hash(self.left_side), hash(self.right_side), self.operator))
+
     def __post_init__(self) -> None:
         if not isinstance(self.left_side, Col):
             self.left_side = Lit(self.left_side)
@@ -243,6 +264,8 @@ class BinaryOperatorColumn(Col):
         )
 
     def zig_code_representation(self) -> str:
+        if self.operator == operator.mod:
+            return f"@rem(({self.left_side.zig_code_representation()}), ({self.right_side.zig_code_representation()}))"
         return (
             f"({self.left_side.zig_code_representation()}) {OP_SYMBOLS[self.operator]}"
             f" ({self.right_side.zig_code_representation()})"
@@ -252,6 +275,12 @@ class BinaryOperatorColumn(Col):
 @dataclass
 class Lit(Col):
     value: Any
+
+    def __eq__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
+        return super().__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash((self.__class__, self.value))
 
     def __post_init__(self) -> None:
         self.name = f"lit_{self.value}"

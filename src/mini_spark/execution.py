@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import math
+import shutil
+import subprocess
 import threading
 from collections.abc import Iterable
 from contextlib import AbstractContextManager
 from copy import deepcopy
 from dataclasses import dataclass, field
+from multiprocessing import Pool
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self
 
 import rpyc
 from rpyc import Connection, OneShotServer, Service
+
+from mini_spark.zig_bridge import compile_stages
 
 from .constants import GLOBAL_TEMP_FOLDER
 from .io import BlockFile
@@ -18,6 +23,7 @@ from .tasks import (
     Job,
     JoinTask,
     LoadShuffleFileTask,
+    LoadTableBlockJob,
     ShuffleToFileTask,
     Task,
     VoidTask,
@@ -39,7 +45,27 @@ if TYPE_CHECKING:
 
 @dataclass
 class JobResults:
+    worker_id: str = ""
     result_files: list[Path] = field(default_factory=list)
+
+
+@dataclass
+class DistributedJob:
+    stage_id: int
+    input_file: Path
+    input_block_id: int
+    output_file: Path = Path()
+    executor_binary: Path = Path()
+
+    def to_tuple(self) -> tuple[int, str, int, str]:
+        return (self.stage_id, str(self.input_file), self.input_block_id, str(self.output_file))
+
+    @staticmethod
+    def from_tuple(t: DistributedJobTuple) -> DistributedJob:
+        return DistributedJob(stage_id=t[0], input_file=Path(t[1]), input_block_id=t[2], output_file=Path(t[3]))
+
+
+DistributedJobTuple = tuple[int, str, int, str]
 
 
 class ExecutionEngine(Protocol):
@@ -71,36 +97,66 @@ def split_into_stages(root_task: Task) -> Iterable[Task]:
     yield root_task
 
 
+def execute_job(job: DistributedJob) -> JobResults:
+    print("executor: executing job", job)  # noqa: T201
+    subprocess.call(  # noqa: S603
+        [
+            str(job.executor_binary),
+            str(job.stage_id),
+            str(job.input_file.absolute()),
+            str(job.input_block_id),
+            str(job.output_file.absolute()),
+        ]
+    )
+    return JobResults(result_files=[job.output_file])
+
+
 class Executor(Service):  # type:ignore[misc]
     def __init__(self, port: int, *, block: bool = True) -> None:
-        self.id = port
+        self.id = str(port)
+        self.executor_path = Path("executors") / self.id
+        self.executor_path.mkdir(parents=True, exist_ok=False)
         server = OneShotServer(self, port=port)
         if block:
             server.start()
         else:
             self.thread = threading.Thread(target=server.start, daemon=True)
             self.thread.start()
+        self.worker_pool = Pool()
 
     def on_connect(self, conn: Connection) -> None:
         print("executor: driver connected", conn)  # noqa: T201
 
     def on_disconnect(self, conn: Connection) -> None:
         print("executor: driver disconnected", conn)  # noqa: T201
+        self.worker_pool.close()
+        shutil.rmtree(self.executor_path, ignore_errors=False)
+        print("executor: files removed")  # noqa: T201
 
     def exposed_get_file_content(self, file_name: str) -> bytes:
         executor_file = Path("executors") / str(self.id) / file_name
         with executor_file.open("rb") as f:
             return f.read()
 
-    def exposed_execute_jobs(self, stage: Task, jobs: list[Job]) -> JobResults:
-        print("executing job on executor", stage, jobs)  # noqa: T201
-        # TODO(david): process all jobs paralelly -> thread pool, give sysargs with job info
-        return JobResults()
+    def exposed_execute_jobs(self, jobs: list[DistributedJobTuple]) -> tuple[str, list[str]]:
+        parsed_jobs = [DistributedJob.from_tuple(job) for job in jobs]
+        for job in parsed_jobs:
+            job.output_file = self.executor_path / f"stage_{job.stage_id}_block_{job.input_block_id}.bin"
+            job.executor_binary = self.executor_path / "executor_binary"
+        worker_results = self.worker_pool.map(execute_job, parsed_jobs)
+        return (
+            self.id,
+            [str(result.absolute()) for results in worker_results for result in results.result_files],
+        )
 
-    def execute_jobs(self, stage: Task, jobs: list[Job]) -> JobResults:
-        raise NotImplementedError
+    def exposed_recieve_binary(self, binary: bytes) -> None:
+        print("executor: received binary")  # noqa: T201
+        binary_destination = self.executor_path / "executor_binary"
+        with binary_destination.open("wb") as f:
+            f.write(binary)
+        binary_destination.chmod(0o755)
 
-    def cleanup(self) -> None:
+    def recieve_binary(self, binary: bytes) -> None:
         raise NotImplementedError
 
 
@@ -118,12 +174,32 @@ class Driver:
         for conn in self.connections:
             conn.close()
 
-    def execute_jobs_on_nodes(self, full_task: Task, jobs: list[Job]) -> list[JobResults]:
+    def execute_stage_on_nodes(self, jobs: list[Job]) -> list[JobResults]:
         async_calls = []
-        for executor, job_chunk in zip(self.executors, chunk_list(jobs, len(self.executors)), strict=True):
+        distributed_jobs = []
+        for job in jobs:
+            assert type(job) is LoadTableBlockJob
+            distributed_jobs.append(
+                DistributedJob(
+                    stage_id=job.current_stage,
+                    input_file=job.table_file.absolute(),
+                    input_block_id=job.block_id,
+                ).to_tuple()
+            )
+        for executor, job_chunk in zip(self.executors, chunk_list(distributed_jobs, len(self.executors)), strict=True):
             remote_execute = rpyc.async_(executor.exposed_execute_jobs)
-            async_calls.append(remote_execute(full_task, job_chunk))
-        return [async_call.value for async_call in async_calls]  # block until all nodes are finished
+            async_calls.append(remote_execute(job_chunk))
+        results_waited_for = [async_call.value for async_call in async_calls]
+        return [
+            JobResults(worker_id=worker_id, result_files=[Path(f) for f in result_files])
+            for worker_id, result_files in results_waited_for
+        ]
+
+    @trace("distribute binary")
+    def distribute_binary(self, binary_file: Path) -> None:
+        with binary_file.open("rb") as f:
+            for executor in self.executors:
+                executor.recieve_binary(f.read())
 
 
 class DistributedExecutionEngine(AbstractContextManager["DistributedExecutionEngine"], ExecutionEngine):
@@ -136,22 +212,41 @@ class DistributedExecutionEngine(AbstractContextManager["DistributedExecutionEng
         return self
 
     def execute_full_task(self, full_task: Task) -> list[JobResults]:
-        # fulltask analyze
-        # fulltask optimize
-        # compile into zig binary
-        # send binary to executors
-        # wait
-        # split task into stages
-        # for each stage:
-        #   generate jobs
-        #   distribute jobs to executors
-        #   collect job results for next stages
-        # collect results from last stage (via jobresults)
-        # collect traces
-        return self.driver.execute_jobs_on_nodes(full_task, [Job(full_task) for _ in range(4)])
+        print("#" * 100)  # noqa: T201
+        print("Logical Plan")  # noqa: T201
+        full_task.explain()
+        full_task = WriteToLocalFileTask(full_task, file_path=Path())
+        Analyzer.analyze(full_task)
+        stages = list(reversed(list(split_into_stages(full_task))))
+        for stage_num, stage in enumerate(stages):
+            Analyzer.optimize(stage, stage_num)
+        binary_output_file = compile_stages(stages)
+        self.driver.distribute_binary(binary_output_file)
+        print(binary_output_file)  # noqa: T201
+        TRACER.start("Execution")
+        final_result = []
+        for stage_num, stage in enumerate(stages):
+            print("#" * 100)  # noqa: T201
+            print("Stage", stage_num)  # noqa: T201
+            TRACER.start(f"Stage {stage_num}")
+            stage.explain()
+            jobs = list(stage.create_jobs(stage, 1))
+            for job in jobs:
+                job.current_stage = stage_num
+            final_result = self.driver.execute_stage_on_nodes(jobs)
+            TRACER.end()
+        TRACER.end()
+        return final_result
 
+    @trace_yield("collect results")
     def collect_results(self, results: list[JobResults], limit: int = -1) -> Iterable[Row]:
-        raise NotImplementedError
+        for job_result in results:
+            for file in job_result.result_files:
+                for row in BlockFile(file).read_data_rows():
+                    yield row
+                    limit -= 1
+                    if limit <= 0:
+                        return
 
     def __exit__(
         self,
@@ -159,6 +254,9 @@ class DistributedExecutionEngine(AbstractContextManager["DistributedExecutionEng
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        self.cleanup()
+
+    def cleanup(self) -> None:
         self.driver.stop()
 
 

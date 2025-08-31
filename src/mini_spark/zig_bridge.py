@@ -3,6 +3,7 @@ from pathlib import Path
 
 from .constants import Schema
 from .tasks import Task
+from .utils import trace
 
 STAGES_FILE = Path("zig-src/src/stage.zig")
 STAGES_BINARY_OUTPUT = Path("zig-src/zig-out/bin/executor")
@@ -13,6 +14,7 @@ class CompileError(Exception):
         super().__init__(message)
 
 
+@trace("compile stages")
 def compile_stages(stages: list[Task]) -> Path:
     code_buffer = [
         'const std = @import("std");',
@@ -44,7 +46,7 @@ def compile_stages(stages: list[Task]) -> Path:
     )
     if result.stderr:
         raise CompileError(result.stderr)
-    # TODO(david): strip binary to cut down size
+    subprocess.call(["strip", str(STAGES_BINARY_OUTPUT)])  # noqa: S603, S607
     return STAGES_BINARY_OUTPUT
 
 
