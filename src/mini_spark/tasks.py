@@ -38,15 +38,9 @@ class Job:
 
     def execute(self) -> Columns:
         out: Columns = ()
-        for task in self.create_task_chain(self.task):
+        for task in self.task.task_chain:
             out = task.execute(out, self)
         return out
-
-    def create_task_chain(self, root: Task) -> Iterable[Task]:
-        if type(root) is VoidTask:
-            return
-        yield from self.create_task_chain(root.parent_task)
-        yield root
 
 
 @dataclass(kw_only=True)
@@ -89,7 +83,7 @@ class LoadJoinFilesJob(Job):
 @trace("project_col")
 def project_column(col: Col, input_columns: Columns, schema: Schema) -> list[Any]:
     col = col.schema_executor(schema)
-    return [col.execute_row(row) for row in zip(*input_columns)]
+    return [col.execute_row(row) for row in zip(*input_columns, strict=True)]
 
 
 @dataclass
@@ -103,12 +97,22 @@ class Task(ABC):
     @abstractmethod
     def explain(self, lvl: int = 0) -> None: ...
 
+    @abstractmethod
+    def generate_zig_code(self, function_name: str) -> str: ...
+
     def validate_schema(self) -> Schema:
         return self.parent_task.validate_schema()
 
     @trace("create_jobs")
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
         yield from self.parent_task.create_jobs(full_task, worker_count)
+
+    @property
+    def task_chain(self) -> Iterable[Task]:
+        if type(self) is VoidTask:
+            return
+        yield from self.parent_task.task_chain
+        yield self
 
 
 @dataclass(kw_only=True)
@@ -119,6 +123,9 @@ class ProjectTask(Task):
     def execute(self, input_columns: Columns, job: Job) -> Columns:  # noqa: ARG002
         assert self.parent_task.inferred_schema is not None
         return tuple(project_column(col, input_columns, self.parent_task.inferred_schema) for col in self.columns)
+
+    def generate_zig_code(self, function_name: str) -> str:
+        raise NotImplementedError
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -154,6 +161,21 @@ class LoadTableTask(Task):
     def execute(self, input_columns: Columns, job: Job) -> Columns:  # noqa: ARG002
         assert type(job) is LoadTableBlockJob
         return BlockFile(job.table_file).read_block_data_columns_by_id(job.block_id)
+
+    def generate_zig_code(self, function_name: str) -> str:
+        return f"""
+            pub fn {function_name}(
+                allocator: std.mem.Allocator,
+                input: []const ColumnData,
+                job: Job,
+                schema: []const ColumnSchema) ![]const ColumnData {{
+                _ = input;
+                _ = schema;
+                const block_file = try Executor.BlockFile.initFromFile(allocator, job.input_file);
+                return try block_file.readBlock(job.input_block_id);
+            }}
+
+        """
 
     @cached_property
     def file_schema(self) -> Schema:
@@ -192,6 +214,9 @@ class LoadShuffleFileTask(Task):
         table_file, block_id = job.shuffle_block_to_load
         return BlockFile(table_file).read_block_data_columns_by_id(block_id)
 
+    def generate_zig_code(self, function_name: str) -> str:
+        raise NotImplementedError
+
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:
         for partition in range(SHUFFLE_PARTITIONS):
             yield LoadShuffleFilesJob(
@@ -225,7 +250,10 @@ class FilterTask(Task):
             input_columns,
             self.parent_task.inferred_schema,
         )
-        return tuple([val for val, cond in zip(col, condition_col) if cond] for col in input_columns)
+        return tuple([val for val, cond in zip(col, condition_col, strict=True) if cond] for col in input_columns)
+
+    def generate_zig_code(self, function_name: str) -> str:
+        raise NotImplementedError
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -295,6 +323,9 @@ class JoinTask(Task):
         shuffle_file.unlink(missing_ok=True)
         tmp_file.unlink(missing_ok=True)
         return output_file
+
+    def generate_zig_code(self, function_name: str) -> str:
+        raise NotImplementedError
 
     def validate_schema(self) -> Schema:
         left_schema = self.parent_task.validate_schema()
@@ -375,6 +406,9 @@ class CountTask(Task):
         counts = Counter(group_column)
         return (list(counts.keys()), list(counts.values()))
 
+    def generate_zig_code(self, function_name: str) -> str:
+        raise NotImplementedError
+
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
         assert self.group_by_column.name in {col_name for col_name, _ in schema}
@@ -405,10 +439,10 @@ class ShuffleToFileTask(Task):
         final_output: tuple[list[list[Any]], ...] = tuple([] for _ in range(SHUFFLE_PARTITIONS))
         for col in input_columns:
             col_buckets: tuple[list[Any], ...] = tuple([] for _ in range(SHUFFLE_PARTITIONS))
-            for val, key in zip(col, key_column):
+            for val, key in zip(col, key_column, strict=True):
                 destination = hash(key) % SHUFFLE_PARTITIONS
                 col_buckets[destination].append(val)
-            for shuffle, col_bucket in zip(final_output, col_buckets):
+            for shuffle, col_bucket in zip(final_output, col_buckets, strict=True):
                 shuffle.append(col_bucket)
         for partition, full_data in enumerate(final_output):
             if len(full_data[0]) == 0:
@@ -416,12 +450,15 @@ class ShuffleToFileTask(Task):
             shuffle_file = Path(
                 SHUFFLE_FOLDER / f"{job.current_stage}_{job.worker_id}_{partition}.bin",
             )
-            data_in_rows = list(zip(*full_data))
+            data_in_rows = list(zip(*full_data, strict=True))
             BlockFile(shuffle_file).append_data(
                 data_in_rows,
                 self.parent_task.inferred_schema,
             )
         return ()
+
+    def generate_zig_code(self, function_name: str) -> str:
+        raise NotImplementedError
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -449,11 +486,14 @@ class VoidTask(Task):
     def execute(self, input_columns: Columns, job: Job) -> Columns:
         raise NotImplementedError
 
-    def explain(self, lvl: int = 0) -> None:
-        pass
+    def generate_zig_code(self, function_name: str) -> str:
+        raise NotImplementedError
 
     def validate_schema(self) -> Schema:
         return []
 
     def create_jobs(self, full_task: Task, worker_count: int) -> Iterable[Job]:  # noqa: ARG002
         return []
+
+    def explain(self, lvl: int = 0) -> None:
+        pass

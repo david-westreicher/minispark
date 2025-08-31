@@ -4,9 +4,10 @@ import atexit
 import functools
 import pickle
 import time
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import TYPE_CHECKING, Any, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import TrackEvent
 from perfetto.trace_builder.proto_builder import TraceProtoBuilder
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 F = TypeVar("F", bound=Callable[..., Any])
+T = TypeVar("T")
 TRUSTED_PACKET_SEQUENCE_ID = 0
 NESTED_SLICE_TRACK_UUID = 12
 MAIN_SYSTEM_TRACK_UUID = 123123
@@ -149,5 +151,12 @@ TRACER = Tracer()
 
 @trace("convert_col_to_rows")
 def convert_columns_to_rows(cols: Columns, schema: Schema) -> Iterable[Row]:
-    for row in zip(*cols):
-        yield {name: val for val, (name, _) in zip(row, schema)}
+    for row in zip(*cols, strict=True):
+        yield {name: val for val, (name, _) in zip(row, schema, strict=True)}
+
+
+def chunk_list[T](lst: list[T], n_chunks: int) -> list[list[T]]:
+    if not lst:
+        return []
+    n = len(lst) // n_chunks
+    return [lst[i : i + n] for i in range(0, len(lst), n)]

@@ -1,7 +1,7 @@
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from heapq import heappop, heappush
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from .constants import Row
 from .io import BlockFile
@@ -54,7 +54,7 @@ def kway_merge(
             curr_el = next(iterator)
             heappush(heap, (key(curr_el), counter, curr_el, iterator))
             counter += 1
-        except StopIteration:  # noqa: PERF203
+        except StopIteration:
             continue
     # merge
     curr_result: list[T] = []

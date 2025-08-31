@@ -1,7 +1,8 @@
 import random
+from collections.abc import Callable
 from pathlib import Path
 from random import shuffle
-from typing import Any, Callable
+from typing import Any
 from unittest.mock import Mock, call
 
 import pytest

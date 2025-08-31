@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const TYPE_I32: u8 = 0;
-const TYPE_STR: u8 = 1;
+pub const TYPE_I32: u8 = 0;
+pub const TYPE_STR: u8 = 1;
 
 pub const Error = error{
     NameTooLong,
@@ -11,9 +11,34 @@ pub const Error = error{
 };
 
 pub const Job = struct {
+    stage_id: u32 = 0,
     input_file: []const u8,
     input_block_id: u32,
     output_file: []const u8,
+
+    pub fn fromArgs(it: *std.process.ArgIterator) !Job {
+        var args: [4][]const u8 = undefined; // we need exactly 3 arguments
+        var idx: usize = 0;
+
+        while (it.next()) |arg| {
+            if (idx == 0) {
+                idx += 1;
+                continue;
+            }
+            if (idx > 4) break; // ignore extra args
+            args[idx - 1] = arg;
+            idx += 1;
+        }
+
+        if (idx - 1 != 4) return error.InvalidArgs;
+
+        return Job{
+            .stage_id = try std.fmt.parseInt(u32, args[0], 10),
+            .input_file = args[1],
+            .input_block_id = try std.fmt.parseInt(u32, args[2], 10),
+            .output_file = args[3],
+        };
+    }
 };
 
 pub const ColumnSchema = struct {
@@ -291,59 +316,6 @@ pub fn test_write_file(allocator: std.mem.Allocator) !void {
     try bf.writeData(file, block);
 }
 
-pub fn task_0(allocator: std.mem.Allocator, input: []ColumnData, job: Job, schema: []const ColumnSchema) ![]const ColumnData {
-    _ = input;
-    _ = schema;
-    const block_file = try BlockFile.initFromFile(allocator, job.input_file);
-    return try block_file.readBlock(job.input_block_id);
-}
-
-pub fn project_01(allocator: std.mem.Allocator, input: []const ColumnData, output: []i32) !ColumnData {
-    _ = allocator;
-    const col0 = input[0].I32;
-    const col1 = input[0].I32;
-    for (col0, col1, 0..) |v1, v2, idx| {
-        output[idx] = v1 + v2;
-    }
-    const const_out = output;
-    return ColumnData{ .I32 = const_out };
-}
-
-pub fn project_02(allocator: std.mem.Allocator, input: []const ColumnData, output: [][]u8) !ColumnData {
-    const col0 = input[1].Str;
-    const col1 = input[1].Str;
-    for (col0, col1, 0..) |v1, v2, idx| {
-        const result = try std.mem.concat(allocator, u8, &[_][]const u8{ v1, v2 });
-        output[idx] = result;
-    }
-    return ColumnData{ .Str = output };
-}
-
-pub fn project_03(allocator: std.mem.Allocator, input: []const ColumnData, output: []bool) void {
-    _ = allocator;
-    const col0 = input[1].Str;
-    for (col0, 0..) |v1, idx| {
-        output[idx] = v1.len > 3;
-    }
-}
-
-pub fn task_1(allocator: std.mem.Allocator, input: []const ColumnData, job: Job, schema: []const ColumnSchema) ![]const ColumnData {
-    _ = job;
-    _ = schema;
-    const rows = input[0].len();
-
-    const col1 = try allocator.alloc(i32, rows);
-    const out1 = try project_01(allocator, input, col1);
-    const col2 = try allocator.alloc([]u8, rows);
-    const out2 = try project_02(allocator, input, col2);
-    const slice: []ColumnData = try allocator.alloc(ColumnData, 2);
-    slice[0] = out1;
-    slice[1] = out2;
-
-    std.debug.print("Task 1 produced {any}\n", .{slice});
-    return slice;
-}
-
 pub fn filter_column(col: ColumnData, condition_col: []const bool, allocator: std.mem.Allocator) !ColumnData {
     var output_rows: usize = 0;
     for (condition_col) |c| {
@@ -373,49 +345,4 @@ pub fn filter_column(col: ColumnData, condition_col: []const bool, allocator: st
             return ColumnData{ .Str = filtered_vals };
         },
     }
-}
-
-pub fn task_2(allocator: std.mem.Allocator, input: []const ColumnData, job: Job, schema: []const ColumnSchema) ![]const ColumnData {
-    _ = job;
-    _ = schema;
-    const rows = input[0].len();
-    const condition_col = try allocator.alloc(bool, rows);
-    _ = project_03(allocator, input, condition_col);
-    const slice: []ColumnData = try allocator.alloc(ColumnData, input.len);
-    for (input, 0..) |col, col_idx| {
-        const filtered_column = try filter_column(col, condition_col, allocator);
-        slice[col_idx] = filtered_column;
-    }
-    return slice;
-}
-
-pub fn task_3(allocator: std.mem.Allocator, input: []const ColumnData, job: Job, schema: []const ColumnSchema) ![]const ColumnData {
-    var block_file = try BlockFile.init(allocator, schema);
-    const block = Block{ .cols = input };
-    try block_file.writeData(job.output_file, block);
-    return (&[_]ColumnData{})[0..];
-}
-
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
-
-    const schema_arr = (&[_]ColumnSchema{
-        .{ .typ = TYPE_I32, .name = "delta" },
-        .{ .typ = TYPE_STR, .name = "msg" },
-    })[0..];
-    const job = Job{
-        .input_file = "example.bf",
-        .input_block_id = 0,
-        .output_file = "output.bf",
-    };
-
-    const first_inpu = &[_]ColumnData{};
-
-    const task_0_out = try task_0(allocator, first_inpu, job, schema_arr);
-    const task_1_out = try task_1(allocator, task_0_out, job, schema_arr);
-    const task_2_out = try task_2(allocator, task_1_out, job, schema_arr);
-    const task_3_out = try task_3(allocator, task_2_out, job, schema_arr);
-    _ = task_3_out;
 }

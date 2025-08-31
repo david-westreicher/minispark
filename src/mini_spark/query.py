@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-class Executor:
+class TaskExecutor:
     def __init__(self, task: Task, worker_count: int = 10) -> None:
         self.task = task
         self.worker_count = worker_count

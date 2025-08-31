@@ -6,6 +6,8 @@ build-backend = "hatchling.build"
 name = "mini_spark"
 version = "0.1.0"
 authors = [{ name = "David Westreicher" }]
+requires-python = ">=3.13"
+dependencies = ["rpyc==6.0.2", "perfetto==0.14.0"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -21,6 +23,14 @@ module = "tests.*"
 strict = true
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
+
+[[tool.mypy.overrides]]
+module = "rpyc.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "perfetto.*"
+ignore_missing_imports = true
 
 [tool.ruff]
 lint.select = ["ALL"]

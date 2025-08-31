@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import operator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .constants import ColumnType, ColumnTypePython, Schema
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
 
 class Col:

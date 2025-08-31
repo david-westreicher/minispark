@@ -21,7 +21,7 @@ MAX_STR_LENGTH = 255
 def validate(schema: Schema, data: list[Row]) -> None:
     for row in data:
         assert len(row) == len(schema)
-        for (_, col_type), value in zip(schema, row):
+        for (_, col_type), value in zip(schema, row, strict=True):
             assert col_type.type is type(value)
 
 
@@ -231,7 +231,7 @@ class BlockFile:
             for block_start in block_starts:
                 f.seek(block_start)
                 block_data = _deserialize_block(f, schema)
-                yield from zip(*block_data)
+                yield from zip(*block_data, strict=True)
 
     def read_data_rows(self) -> Iterable[Row]:
         for block in self.read_blocks_sequentially():
@@ -239,7 +239,7 @@ class BlockFile:
 
     def read_block_data(self, block_id: int) -> list[tuple[Any, ...]]:
         block_data_columns = self.read_block_data_columns_by_id(block_id)
-        return list(zip(*block_data_columns))
+        return list(zip(*block_data_columns, strict=True))
 
     def read_block_data_columns_by_id(self, block_id: int) -> Columns:
         schema = self.file_schema
@@ -258,7 +258,7 @@ class BlockFile:
         schema = self.file_schema
         for block_id in range(len(self.block_starts)):
             block_data = self.read_block_data(block_id)
-            row_data = [{col_name: val for val, (col_name, _) in zip(row, schema)} for row in block_data]
+            row_data = [{col_name: val for val, (col_name, _) in zip(row, schema, strict=True)} for row in block_data]
             yield row_data
 
     def create_block_reader(
@@ -283,12 +283,12 @@ class BlockFile:
                     block_rows,
                     chunk_size=row_buffer_size,
                 )
-                for f, (col_name, _) in zip(file_handles, schema)
+                for f, (col_name, _) in zip(file_handles, schema, strict=True)
             ]
-            for row_tuple_chunk in zip(*column_readers):
+            for row_tuple_chunk in zip(*column_readers, strict=True):
                 yield from [
                     {col_name: row_tuple[col_idx] for col_idx, (col_name, _) in enumerate(schema)}
-                    for row_tuple in zip(*row_tuple_chunk)
+                    for row_tuple in zip(*row_tuple_chunk, strict=True)
                 ]
 
     def merge_files(self, files: list[Path]) -> Self:
