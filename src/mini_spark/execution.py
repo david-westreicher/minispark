@@ -127,7 +127,7 @@ class Executor(Service):  # type:ignore[misc]
         if block:
             server.start()
         else:
-            self.thread = threading.Thread(target=server.start, daemon=True)
+            self.thread = threading.Thread(target=server.start, daemon=False)
             self.thread.start()
         self.worker_pool = Pool()
 

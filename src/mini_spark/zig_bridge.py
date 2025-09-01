@@ -47,7 +47,6 @@ def compile_stages(stages: list[Task]) -> Path:
     )
     if result.stderr:
         raise CompileError(result.stderr)
-    subprocess.call(["strip", str(STAGES_BINARY_OUTPUT)])  # noqa: S603, S607
     return STAGES_BINARY_OUTPUT
 
 
