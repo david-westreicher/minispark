@@ -4,6 +4,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+ROWS_PER_BLOCK = 2 * 1024 * 1024
+SHUFFLE_PARTITIONS = 10
+WORKER_POOL_PROCESSES = 6
+GLOBAL_TEMP_FOLDER = Path("tmp/")
+SHUFFLE_FOLDER = Path("shuffle/")
+
 
 class ColumnType(Enum):
     INTEGER = (0, int)
@@ -45,12 +51,14 @@ class ColumnType(Enum):
             return "Str"
         raise NotImplementedError(self)
 
+    def __str__(self) -> str:
+        return self.name
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
 
 ColumnTypePython = int | str
-GLOBAL_TEMP_FOLDER = Path("tmp/")
-SHUFFLE_FOLDER = Path("shuffle/")
-BLOCK_SIZE = 10 * 1024 * 1024  # 10 MB
-SHUFFLE_PARTITIONS = 10
 Row = dict[str, Any]
 Columns = tuple[list[Any], ...]
 Schema = list[tuple[str, ColumnType]]

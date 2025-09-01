@@ -8,7 +8,6 @@ from unittest.mock import Mock, call
 import pytest
 
 from mini_spark.algorithms import (
-    SORT_BLOCK_SIZE,
     external_merge_join,
     external_sort,
     kway_merge,
@@ -29,7 +28,7 @@ def test_external_sort(tmp_path: Path, key_function: Callable[[Row], Any]):
     random.seed(42)
     input_data: list[Row] = [{"int_col": i, "str_col": f"text_{i}"} for i in range(1_000)]
     shuffle(input_data)
-    BlockFile(input_file, block_size=SORT_BLOCK_SIZE).write_rows(input_data)
+    BlockFile(input_file).write_rows(input_data)
 
     # act
     external_sort(input_file, key_function, output_file, tmp_file)
@@ -123,8 +122,8 @@ def test_external_merge_join(tmp_path: Path):
         {"id": "duplicate_right", "other": 7},
         {"id": "duplicate_right", "other": 8},
     ]
-    BlockFile(left_file, block_size=SORT_BLOCK_SIZE).write_rows(left_input_data)
-    BlockFile(right_file, block_size=SORT_BLOCK_SIZE).write_rows(right_input_data)
+    BlockFile(left_file).write_rows(left_input_data)
+    BlockFile(right_file).write_rows(right_input_data)
     key = lambda row: row["id"]  # noqa: E731
 
     # act

@@ -117,7 +117,7 @@ pub const ColumnSchema = struct {
 
     pub fn readSchema(allocator: std.mem.Allocator, reader: *std.fs.File.Reader) ![]ColumnSchema {
         const column_nums = try reader.interface.takeInt(u8, .little);
-        var columns = try std.ArrayList(ColumnSchema).initCapacity(allocator, @intCast(column_nums));
+        var columns = try std.ArrayList(ColumnSchema).initCapacity(allocator, column_nums);
         for (0..column_nums) |_| {
             const col_type = try reader.interface.takeInt(u8, .little);
             const name_len = try reader.interface.takeInt(u8, .little);
@@ -165,6 +165,9 @@ pub const ColumnData = union(enum) {
                 for (vals) |s| {
                     const str_len: u8 = @intCast(s.len);
                     try file.writeAll(std.mem.asBytes(&str_len));
+                }
+                // TODO: We could write this all in one call, we know that all strings are contiguous
+                for (vals) |s| {
                     try file.writeAll(s);
                 }
             },
@@ -182,19 +185,30 @@ pub const ColumnData = union(enum) {
         _ = try reader.interface.takeInt(u32, .little);
         switch (typ) {
             TYPE_I32 => {
-                const vals = try allocator.alloc(i32, @intCast(row_count));
+                const vals = try allocator.alloc(i32, row_count);
                 try reader.interface.readSliceAll(std.mem.sliceAsBytes(vals));
                 return ColumnData{ .I32 = vals };
             },
             TYPE_STR => {
-                var vals = try std.ArrayList([]const u8).initCapacity(allocator, @intCast(row_count));
-                for (0..row_count) |_| {
-                    const str_len = try reader.interface.takeInt(u8, .little);
-                    const str_buf = try allocator.alloc(u8, str_len);
-                    try reader.interface.readSliceAll(str_buf);
-                    try vals.append(allocator, str_buf);
+                const lengths = try allocator.alloc(u8, row_count);
+                defer allocator.free(lengths);
+
+                try reader.interface.readSliceAll(std.mem.sliceAsBytes(lengths));
+                var total_length: usize = 0;
+                for (lengths) |l| {
+                    total_length += l;
                 }
-                return ColumnData{ .Str = vals.items };
+
+                const string_buffer = try allocator.alloc(u8, total_length);
+                try reader.interface.readSliceAll(string_buffer);
+
+                const string_columns = try allocator.alloc([]const u8, total_length);
+                var offset: u32 = 0;
+                for (lengths, 0..) |length, i| {
+                    string_columns[i] = string_buffer[offset .. offset + length];
+                    offset += length;
+                }
+                return ColumnData{ .Str = string_columns };
             },
             else => {
                 return Error.UnknownType;
@@ -310,7 +324,7 @@ pub const BlockFile = struct {
         const footer_size = 4 + (block_count * 4);
         try reader.seekTo(file_size - footer_size);
 
-        var starts = try std.ArrayList(u32).initCapacity(allocator, @intCast(block_count));
+        var starts = try std.ArrayList(u32).initCapacity(allocator, block_count);
         for (0..block_count) |_| {
             const off = try reader.interface.takeInt(u32, .little);
             try starts.append(allocator, off);

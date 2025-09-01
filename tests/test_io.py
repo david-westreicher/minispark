@@ -15,8 +15,8 @@ def test_serialize_deserialize_schema(temporary_file: Path):
     ]
 
     # act
-    block_file = BlockFile(temporary_file)
-    block_file.write_tuples([], schema)
+    block_file = BlockFile(temporary_file, schema)
+    block_file.write_rows([])
     deserialized_schema = _deserialize_schema(temporary_file.open("rb"))
 
     # assert
@@ -25,48 +25,40 @@ def test_serialize_deserialize_schema(temporary_file: Path):
 
 def test_serialize_deserialize_data(temporary_file: Path):
     # arrange
-    schema = [
-        ("int_col", ColumnType.INTEGER),
-        ("str_col", ColumnType.STRING),
-    ]
-    data = [
-        (1, "1"),
-        (2, "2"),
+    rows = [
+        {"int_col": 1, "str_col": "1"},
+        {"int_col": 2, "str_col": "2"},
     ]
 
     # act
     block_file = BlockFile(temporary_file)
-    block_file.write_tuples(data, schema)
+    block_file.write_rows(rows)
     deserialized_schema = block_file.file_schema
-    all_data = list(block_file.read_data())
+    all_data = list(block_file.read_data_rows())
 
     # assert
-    assert deserialized_schema == schema
-    assert all_data == data
+    assert deserialized_schema == block_file.schema
+    assert all_data == rows
 
 
 def test_serialize_append_deserialize_data(temporary_file: Path):
     # arrange
-    schema = [
-        ("int_col", ColumnType.INTEGER),
-        ("str_col", ColumnType.STRING),
+    rows = [
+        {"int_col": 1, "str_col": "1"},
+        {"int_col": 2, "str_col": "2"},
     ]
-    data = [
-        (1, "1"),
-        (2, "2"),
-    ]
-    new_data = [
-        (3, "3"),
-        (4, "4"),
+    new_rows = [
+        {"int_col": 3, "str_col": "3"},
+        {"int_col": 4, "str_col": "4"},
     ]
 
     # act
     block_file = BlockFile(temporary_file)
-    block_file.write_tuples(data, schema)
-    block_file.append_tuples(new_data)
+    block_file.write_rows(rows)
+    block_file.append_rows(new_rows)
     deserialized_schema = block_file.file_schema
-    all_data = list(block_file.read_data())
+    all_data = list(block_file.read_data_rows())
 
     # assert
-    assert deserialized_schema == schema
-    assert all_data == data + new_data
+    assert deserialized_schema == [("int_col", ColumnType.INTEGER), ("str_col", ColumnType.STRING)]
+    assert all_data == rows + new_rows

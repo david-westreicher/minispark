@@ -19,7 +19,7 @@ from rpyc import Connection, OneShotServer, Service
 
 from mini_spark.zig_bridge import compile_stages
 
-from .constants import GLOBAL_TEMP_FOLDER
+from .constants import GLOBAL_TEMP_FOLDER, WORKER_POOL_PROCESSES
 from .io import BlockFile
 from .tasks import (
     Job,
@@ -129,7 +129,7 @@ class Executor(Service):  # type:ignore[misc]
         else:
             self.thread = threading.Thread(target=server.start, daemon=False)
             self.thread.start()
-        self.worker_pool = Pool()
+        self.worker_pool = Pool(processes=WORKER_POOL_PROCESSES)
 
     def on_connect(self, conn: Connection) -> None:
         print("executor: driver connected", conn)  # noqa: T201

@@ -7,7 +7,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from .algorithms import SORT_BLOCK_SIZE, external_merge_join, external_sort
+from .algorithms import external_merge_join, external_sort
 from .constants import (
     SHUFFLE_FOLDER,
     SHUFFLE_PARTITIONS,
@@ -397,7 +397,7 @@ class JoinTask(Task):
     def sort_shuffle_files(self, shuffle_files: list[Path], key: Col) -> Path | None:
         if not shuffle_files:
             return None
-        shuffle_file = BlockFile(create_temp_file(), SORT_BLOCK_SIZE).merge_files(shuffle_files).file
+        shuffle_file = BlockFile(create_temp_file()).merge_files(shuffle_files).file
         output_file = create_temp_file()
         tmp_file = create_temp_file()
         external_sort(shuffle_file, key.execute, output_file, tmp_file)
@@ -532,10 +532,7 @@ class ShuffleToFileTask(Task):
                 SHUFFLE_FOLDER / f"{job.current_stage}_{job.worker_id}_{partition}.bin",
             )
             data_in_rows = list(zip(*full_data, strict=True))
-            BlockFile(shuffle_file).append_tuples(
-                data_in_rows,
-                self.parent_task.inferred_schema,
-            )
+            BlockFile(shuffle_file, self.parent_task.inferred_schema).append_tuples(data_in_rows)
         return ()
 
     def generate_zig_code(self, function_name: str) -> str:

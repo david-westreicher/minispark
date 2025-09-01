@@ -3,10 +3,8 @@ from heapq import heappop, heappush
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .constants import Row
+from .constants import ROWS_PER_BLOCK, Row
 from .io import BlockFile
-
-SORT_BLOCK_SIZE = 10 * 1024**2  # 10 MB
 
 T = TypeVar("T")
 
@@ -17,8 +15,9 @@ def external_sort(
     output_file: Path,
     temporary_file: Path,
 ) -> None:
-    merge_file = BlockFile(temporary_file, SORT_BLOCK_SIZE)
-    for block in BlockFile(file_to_sort, SORT_BLOCK_SIZE).read_blocks_sequentially():
+    block_file_to_sort = BlockFile(file_to_sort)
+    merge_file = BlockFile(temporary_file, block_file_to_sort.file_schema)
+    for block in block_file_to_sort.read_blocks_sequentially():
         block.sort(key=key_col)
         merge_file.append_rows(block)
 
@@ -27,7 +26,7 @@ def external_sort(
         for block_start in merge_file.block_starts
     ]
 
-    output_block_file = BlockFile(output_file, SORT_BLOCK_SIZE)
+    output_block_file = BlockFile(output_file, block_file_to_sort.file_schema)
 
     def write_merge_result(rows: list[Row]) -> None:
         output_block_file.append_rows(rows)
@@ -36,7 +35,7 @@ def external_sort(
         iterators,
         key_col,
         write_merge_result,
-        action_trigger_size=SORT_BLOCK_SIZE,
+        action_trigger_size=ROWS_PER_BLOCK,
     )
 
 
