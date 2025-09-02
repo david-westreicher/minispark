@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
 
-from mini_spark.utils import trace
+from mini_spark.utils import trace, trace_yield
 
 from . import constants
 from .constants import Columns, ColumnType, Row, Schema
@@ -63,6 +63,7 @@ def _deserialize_schema(f: BinaryIO) -> Schema:
     return schema
 
 
+@trace_yield("serialize blocks")
 def _generate_data_blocks_for_columns(
     schema: Schema,
     columns: Columns,

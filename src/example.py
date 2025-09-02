@@ -3,6 +3,7 @@ from pathlib import Path
 from mini_spark.dataframe import DataFrame
 from mini_spark.io import BlockFile
 from mini_spark.sql import Col
+from mini_spark.utils import TRACER
 
 BlockFile(Path("fruit_color.bin")).write_rows(
     [
@@ -19,3 +20,4 @@ colors.show()
 counts = DataFrame().table("fruit_count.bin").select(Col("id").alias("count_id"), Col("count"))
 counts.show()
 colors.join(counts, on=Col("color_id") == Col("count_id"), how="inner").show(n=20)
+TRACER.save("trace.pftrace")

@@ -7,7 +7,7 @@ from uuid import uuid4
 class OutputFile:
     executor_id: str
     file_path: Path
-    partition: int
+    partition: int = 0
 
 
 @dataclass

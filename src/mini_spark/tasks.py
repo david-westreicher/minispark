@@ -353,18 +353,6 @@ class JoinTask(ProducerTask):
             raise ValueError(f"Unknown columns in Join: {unknown_cols}")
         return left_schema + right_schema
 
-    def collect_shuffle_files(
-        self,
-        stage: int,
-        worker_count: int,
-        partition: int,
-    ) -> Iterable[Path]:
-        for worker_from in range(worker_count):
-            shuffle_file = SHUFFLE_FOLDER / f"{stage}_{worker_from}_{partition}.bin"
-            if not shuffle_file.exists():
-                continue
-            yield shuffle_file
-
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(  # noqa: T201
@@ -474,7 +462,7 @@ class WriteToLocalFileTask(WriterTask):
         output_file = Path(SHUFFLE_FOLDER / stage_id / "result.bin")
         output_file.parent.mkdir(parents=True, exist_ok=True)
         BlockFile(output_file, schema=self.parent_task.inferred_schema).append_data(input_columns)
-        return [OutputFile("local", output_file, 0)]
+        return [OutputFile("local", output_file)]
 
     def generate_zig_code(self, function_name: str) -> str:
         # TODO(david): should be append, not write

@@ -256,7 +256,7 @@ class PythonExecutionEngine(ExecutionEngine):
         TRACER.end()
         last_stage = physical_plan.stages[-1]
         self.shuffle_files_to_delete.update(
-            f.file_path for result in last_stage.job_results for f in result.output_files
+            f.file_path for stage in physical_plan.stages for result in stage.job_results for f in result.output_files
         )
         return last_stage.job_results
 
