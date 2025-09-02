@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 
 from mini_spark.constants import ColumnType
-from mini_spark.execution import PhysicalPlan
 from mini_spark.io import BlockFile
+from mini_spark.plan import PhysicalPlan
 from mini_spark.sql import Col, Lit
 from mini_spark.tasks import (
     AggregateCountTask,

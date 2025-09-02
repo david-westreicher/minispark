@@ -301,7 +301,6 @@ pub const BlockFile = struct {
         try ColumnSchema.serializeSchema(file, self.schema);
         const start: u32 = @intCast(try file.getPos());
         try self.block_starts.append(self.allocator, start);
-        std.debug.print("Writing block at offset {any}\n", .{data});
         try data.serialize(file);
         try self.writeFooter(file);
         return;
