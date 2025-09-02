@@ -4,22 +4,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
 from .execution import ExecutionEngine, PythonExecutionEngine
-from .sql import BinaryOperatorColumn, Col
 from .tasks import (
-    CountTask,
+    AggregateCountTask,
     FilterTask,
     JoinTask,
     JoinType,
-    LoadShuffleFileTask,
-    LoadTableTask,
+    LoadTableBlockTask,
     ProjectTask,
-    ShuffleToFileTask,
     Task,
     VoidTask,
 )
 
 if TYPE_CHECKING:
     from .constants import Row, Schema
+    from .sql import Col
 
 
 class GroupedData:
@@ -28,9 +26,7 @@ class GroupedData:
         self.group_column = column
 
     def count(self) -> DataFrame:
-        self.df.task = ShuffleToFileTask(self.df.task, key_column=self.group_column)
-        self.df.task = LoadShuffleFileTask(self.df.task)
-        self.df.task = CountTask(self.df.task, group_by_column=self.group_column)
+        self.df.task = AggregateCountTask(self.df.task, group_by_column=self.group_column)
         return self.df
 
 
@@ -44,7 +40,7 @@ class DataFrame:
         return self.task.validate_schema()
 
     def table(self, file_path: str) -> Self:
-        self.task = LoadTableTask(self.task, file_path=Path(file_path))
+        self.task = LoadTableBlockTask(self.task, file_path=Path(file_path))
         return self
 
     def select(self, *columns: Col) -> Self:
@@ -59,16 +55,7 @@ class DataFrame:
         return GroupedData(self, column)
 
     def join(self, other_df: Self, on: Col, how: JoinType) -> DataFrame:
-        assert type(on) is BinaryOperatorColumn
-        # TODO(david): extract left,right side correctly (maybe in analyze)
-        self.task = ShuffleToFileTask(self.task)
-        other_df.task = ShuffleToFileTask(other_df.task)
-        self.task = JoinTask(
-            self.task,
-            right_side_task=other_df.task,
-            join_condition=on,
-            how=how,
-        )
+        self.task = JoinTask(self.task, right_side_task=other_df.task, join_condition=on, how=how)
         return self
 
     def collect(self) -> list[Row]:

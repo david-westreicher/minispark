@@ -9,18 +9,18 @@ from mini_spark.sql import Col, Lit
 from mini_spark.tasks import (
     FilterTask,
     JoinTask,
-    LoadShuffleFileTask,
-    LoadTableTask,
+    LoadShuffleFilesTask,
+    LoadTableBlockTask,
     ProjectTask,
-    ShuffleToFileTask,
     VoidTask,
+    WriteToShufflePartitions,
 )
 
 
 def test_schema_propagation_load_table():
     # arrange
     test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
-    task = LoadTableTask(VoidTask(), file_path=Path())
+    task = LoadTableBlockTask(VoidTask(), file_path=Path())
 
     # act
     with patch.object(
@@ -37,7 +37,7 @@ def test_schema_propagation_projection():
     # arrange
     test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
     task = ProjectTask(
-        LoadTableTask(VoidTask(), file_path=Path()),
+        LoadTableBlockTask(VoidTask(), file_path=Path()),
         columns=[
             Col("a"),
             Col("b"),
@@ -70,7 +70,7 @@ def test_schema_propagation_projection():
 def test_schema_propagation_projection_type_mismatch():
     test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
     task = ProjectTask(
-        LoadTableTask(VoidTask(), file_path=Path()),
+        LoadTableBlockTask(VoidTask(), file_path=Path()),
         columns=[
             Col("a") + Col("b"),
         ],
@@ -91,7 +91,7 @@ def test_schema_propagation_projection_type_mismatch():
 def test_schema_propagation_projection_select_star():
     test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
     task = ProjectTask(
-        LoadTableTask(VoidTask(), file_path=Path()),
+        LoadTableBlockTask(VoidTask(), file_path=Path()),
         columns=[
             Col("a").alias("start"),
             Col("*"),
@@ -119,7 +119,7 @@ def test_schema_propagation_projection_select_star():
 def test_schema_propagation_load_shuffle_file_task():
     # arrange
     test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
-    task = LoadShuffleFileTask(LoadTableTask(VoidTask(), file_path=Path()))
+    task = LoadShuffleFilesTask(LoadTableBlockTask(VoidTask(), file_path=Path()))
 
     # act
     with patch.object(
@@ -136,7 +136,7 @@ def test_schema_propagation_filter_task():
     # arrange
     test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
     task = FilterTask(
-        LoadTableTask(VoidTask(), file_path=Path()),
+        LoadTableBlockTask(VoidTask(), file_path=Path()),
         condition=Col("a") > Col("b"),
     )
 
@@ -155,7 +155,7 @@ def test_schema_propagation_filter_task_fails():
     # arrange
     test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
     task = FilterTask(
-        LoadTableTask(VoidTask(), file_path=Path()),
+        LoadTableBlockTask(VoidTask(), file_path=Path()),
         condition=Col("c") > Lit(5),
     )
 
@@ -175,10 +175,10 @@ def test_schema_propagation_join_task():
     # arrange
     test_table_schema = [("left_id", ColumnType.STRING), ("b", ColumnType.INTEGER)]
     task = JoinTask(
-        ShuffleToFileTask(LoadTableTask(VoidTask(), file_path=Path())),
-        right_side_task=ShuffleToFileTask(
+        WriteToShufflePartitions(LoadTableBlockTask(VoidTask(), file_path=Path())),
+        right_side_task=WriteToShufflePartitions(
             ProjectTask(
-                LoadTableTask(VoidTask(), file_path=Path()),
+                LoadTableBlockTask(VoidTask(), file_path=Path()),
                 columns=[
                     Col("left_id").alias("right_id"),
                     Col("b").alias("c"),

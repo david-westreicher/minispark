@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
 
+from mini_spark.utils import trace
+
 from . import constants
 from .constants import Columns, ColumnType, Row, Schema
 
@@ -127,6 +129,7 @@ def _deserialize_block_column(
         yield curr_chunk
 
 
+@trace("deserialize block")
 def _deserialize_block(f: BinaryIO, schema: Schema) -> Columns:
     block_rows = read_unsigned_int(f)
     data: list[list[Any]] = [[] for _ in schema]
@@ -191,7 +194,9 @@ class BlockFile:
     def append_data(self, data: Columns) -> Self:
         if not self.file.exists():
             return self.write_data(data)
+        # TODO(david): Should append to last block, so that rows per block stays constant (except last block)
         schema = self.file_schema
+        assert schema == self.schema
         block_starts = self.block_starts
         with self.file.open(mode="rb+") as f:
             f.seek(-4 * (len(block_starts) + 1), os.SEEK_END)
@@ -250,6 +255,13 @@ class BlockFile:
             block_data = self.read_block_data(block_id)
             row_data = [{col_name: val for val, (col_name, _) in zip(row, schema, strict=True)} for row in block_data]
             yield row_data
+
+    def read_block_data_columns_sequentially(self) -> Iterable[Columns]:
+        schema = self.file_schema
+        with self.file.open("rb") as f:
+            for block_start in self.block_starts:
+                f.seek(block_start)
+                yield _deserialize_block(f, schema)
 
     def create_block_reader(
         self,
