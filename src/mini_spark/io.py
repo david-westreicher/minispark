@@ -8,12 +8,11 @@ from typing import TYPE_CHECKING, Any, BinaryIO, Self
 
 from mini_spark.utils import trace, trace_yield
 
-from . import constants
-from .constants import Columns, ColumnType, Row, Schema
+from .constants import ROWS_PER_BLOCK, Columns, ColumnType, Row, Schema
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from io import BufferedWriter
+    from io import BufferedRandom, BufferedWriter
     from pathlib import Path
 
 MAX_COLUMNS = 0xFF
@@ -64,11 +63,11 @@ def _generate_data_blocks_for_columns(
     if len(columns) == 0 or len(columns[0]) == 0:
         return
     totalrows = len(columns[0])
-    for offset in range(0, totalrows, constants.ROWS_PER_BLOCK):
-        block_rows = min(offset + constants.ROWS_PER_BLOCK, totalrows) - offset
+    for offset in range(0, totalrows, ROWS_PER_BLOCK):
+        block_rows = min(offset + ROWS_PER_BLOCK, totalrows) - offset
         block_bytes = list(to_unsigned_int(block_rows))
         for col, (_, col_type) in zip(columns, schema, strict=True):
-            block_data = col[offset : offset + constants.ROWS_PER_BLOCK]
+            block_data = col[offset : offset + ROWS_PER_BLOCK]
             col_data = []
             if col_type == ColumnType.INTEGER:
                 for val in block_data:
@@ -141,15 +140,25 @@ def _deserialize_block_starts(f: BinaryIO) -> list[int]:
     return [read_unsigned_int(f) for _ in range(block_counts)]
 
 
+def merge_data_blocks(data_block_1: Columns, data_block_2: Columns) -> Columns:
+    merged_data = []
+    for col1, col2 in zip(data_block_1, data_block_2, strict=True):
+        merged_data.append(col1 + col2)
+    return tuple(merged_data)
+
+
 @dataclass
 class BlockFile:
     file: Path
     schema: Schema = field(default_factory=list)
+    _block_starts: list[int] | None = field(default=None, init=False, repr=False)
 
-    @cached_property
+    @property
     def block_starts(self) -> list[int]:
-        with self.file.open("rb") as f:
-            return _deserialize_block_starts(f)
+        if self._block_starts is None:
+            with self.file.open("rb") as f:
+                self._block_starts = _deserialize_block_starts(f)
+        return self._block_starts
 
     @cached_property
     def file_schema(self) -> Schema:
@@ -166,6 +175,7 @@ class BlockFile:
             if self.schema:
                 with self.file.open(mode="wb") as f:
                     _serialize_schema(self.schema, f)
+                    f.write(to_unsigned_int(0))
             return self
         first_row = data[0]
         self.schema = [(key, ColumnType.of(value)) for key, value in first_row.items()]
@@ -174,6 +184,7 @@ class BlockFile:
 
     def _write_data_with_known_schema(self, columns_data: Columns, schema: Schema) -> Self:
         assert schema
+        self._block_starts = None
         with self.file.open(mode="wb") as f:
             _serialize_schema(schema, f)
             block_starts = []
@@ -186,14 +197,19 @@ class BlockFile:
         return self
 
     def append_data(self, data: Columns) -> Self:
-        if not self.file.exists():
+        self._block_starts = None
+        if not self.file.exists() or len(self.block_starts) == 0:
             return self.write_data(data)
-        # TODO(david): Should append to last block, so that rows per block stays constant (except last block)
-        schema = self.file_schema
-        assert schema == self.schema, (self.file, self.schema, self.file_schema)
         block_starts = self.block_starts
+        schema = self.file_schema
+        assert self.schema == self.file_schema, (self.file, self.schema, self.file_schema)
         with self.file.open(mode="rb+") as f:
-            f.seek(-4 * (len(block_starts) + 1), os.SEEK_END)
+            last_block = self.read_block_data_columns_by_id(len(self.block_starts) - 1, f)
+            if len(last_block[0]) < ROWS_PER_BLOCK:
+                data = merge_data_blocks(last_block, data)
+                f.seek(block_starts.pop(), os.SEEK_SET)
+            else:
+                f.seek(-4 * (len(block_starts) + 1), os.SEEK_END)  # right after last block
             for data_block in _generate_data_blocks_for_columns(schema, data):
                 block_starts.append(f.tell())
                 f.write(data_block)
@@ -221,12 +237,15 @@ class BlockFile:
         block_data_columns = self.read_block_data_columns_by_id(block_id)
         return list(zip(*block_data_columns, strict=True))
 
-    def read_block_data_columns_by_id(self, block_id: int) -> Columns:
+    def read_block_data_columns_by_id(self, block_id: int, f: BufferedRandom | None = None) -> Columns:
         schema = self.file_schema
         block_start = self.block_starts[block_id]
-        with self.file.open("rb") as f:
+        if f is not None:
             f.seek(block_start)
             return _deserialize_block(f, schema)
+        with self.file.open("rb") as file:
+            file.seek(block_start)
+            return _deserialize_block(file, schema)
 
     def read_blocks_sequentially(self) -> Iterable[list[Row]]:
         schema = self.file_schema

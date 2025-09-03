@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import patch
 
 from mini_spark.constants import ColumnType
 from mini_spark.io import (
@@ -62,3 +63,29 @@ def test_serialize_append_deserialize_data(temporary_file: Path):
     # assert
     assert deserialized_schema == [("int_col", ColumnType.INTEGER), ("str_col", ColumnType.STRING)]
     assert all_data == rows + new_rows
+
+
+def test_append_keeping_max_row_size(temporary_file: Path):
+    # arrange
+    block_file = BlockFile(temporary_file, [("col1", ColumnType.STRING)]).write_rows([])
+
+    # act/assert
+    with patch("mini_spark.io.ROWS_PER_BLOCK", 10):
+        for _ in range(10):
+            block_file.append_rows([{"col1": "x"}])
+            assert len(BlockFile(temporary_file).block_starts) == 1
+
+        # this triggers the creation of a new block
+        block_file.append_rows([{"col1": "x"}])
+        assert len(BlockFile(temporary_file).block_starts) == 2
+        assert len(list(BlockFile(temporary_file).read_data_rows())) == 11
+
+        # now we add 5 -> still same block
+        block_file.append_rows([{"col1": "x"}] * 5)
+        assert len(BlockFile(temporary_file).block_starts) == 2
+        assert len(list(BlockFile(temporary_file).read_data_rows())) == 16
+
+        # now we add 5 -> new block
+        block_file.append_rows([{"col1": "x"}] * 5)
+        assert len(BlockFile(temporary_file).block_starts) == 3
+        assert len(list(BlockFile(temporary_file).read_data_rows())) == 21
