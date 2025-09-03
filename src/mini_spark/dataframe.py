@@ -60,7 +60,9 @@ class DataFrame:
 
     def collect(self) -> list[Row]:
         job_results = self.engine.execute_full_task(self.task)
-        return list(self.engine.collect_results(job_results))
+        result = list(self.engine.collect_results(job_results))
+        self.engine.cleanup()
+        return result
 
     def show(self, n: int = 10) -> None:
         results = self.engine.execute_full_task(self.task)
@@ -71,3 +73,4 @@ class DataFrame:
                 print("|" + ("+".join("-" * 10 for _ in row)) + "|")  # noqa: T201
                 first = False
             print("|" + ("|".join(f"{v:<10}" for v in row.values())) + "|")  # noqa: T201
+        self.engine.cleanup()

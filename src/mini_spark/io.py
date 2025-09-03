@@ -190,7 +190,7 @@ class BlockFile:
             return self.write_data(data)
         # TODO(david): Should append to last block, so that rows per block stays constant (except last block)
         schema = self.file_schema
-        assert schema == self.schema
+        assert schema == self.schema, (self.file, self.schema, self.file_schema)
         block_starts = self.block_starts
         with self.file.open(mode="rb+") as f:
             f.seek(-4 * (len(block_starts) + 1), os.SEEK_END)

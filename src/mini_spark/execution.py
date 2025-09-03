@@ -5,12 +5,13 @@ import multiprocessing
 import shutil
 import subprocess
 import threading
+from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, Self
+from typing import TYPE_CHECKING, Self
 
 import rpyc
 from rpyc import Connection, OneShotServer, Service
@@ -36,10 +37,22 @@ if TYPE_CHECKING:
     from .tasks import Task
 
 
-class ExecutionEngine(Protocol):
+class ExecutionEngine(ABC):
+    @abstractmethod
     def execute_full_task(self, full_task: Task) -> list[JobResult]: ...
-    def collect_results(self, results: list[JobResult], limit: int = -1) -> Iterable[Row]: ...
+
+    @abstractmethod
     def cleanup(self) -> None: ...
+
+    @trace_yield("collect results")
+    def collect_results(self, results: list[JobResult], limit: int = math.inf) -> Iterable[Row]:  # type:ignore[assignment]
+        output_files = {file for result in results for file in result.output_files}
+        for file in output_files:
+            for row in BlockFile(file.file_path).read_data_rows():
+                yield row
+                limit -= 1
+                if limit <= 0:
+                    return
 
 
 class PythonExecutionEngine(ExecutionEngine):
@@ -117,26 +130,16 @@ class DistributedExecutionEngine(AbstractContextManager["DistributedExecutionEng
         last_stage = physical_plan.stages[-1]
         return last_stage.job_results
 
-    @trace_yield("collect results")
-    def collect_results(self, results: list[JobResult], limit: int = math.inf) -> Iterable[Row]:  # type:ignore[assignment]
-        output_files = {file for result in results for file in result.output_files}
-        for file in output_files:
-            for row in BlockFile(file.file_path).read_data_rows():
-                yield row
-                limit -= 1
-                if limit <= 0:
-                    return
-
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        self.cleanup()
+        self.driver.stop()
 
     def cleanup(self) -> None:
-        self.driver.stop()
+        pass  # cleanup is done on executors, after driver stop
 
 
 DistributedJobTuple = tuple[str, str, str, int, str]
