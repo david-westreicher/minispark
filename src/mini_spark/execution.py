@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Protocol, Self
 import rpyc
 from rpyc import Connection, OneShotServer, Service
 
-from mini_spark.zig_bridge import compile_plan
+from mini_spark.codegen import compile_plan
 
 from .constants import WORKER_POOL_PROCESSES
 from .io import BlockFile

@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 F = TypeVar("F", bound=Callable[..., Any])
 T = TypeVar("T")
 TRUSTED_PACKET_SEQUENCE_ID = 0
-NESTED_SLICE_TRACK_UUID = 12
 MAIN_SYSTEM_TRACK_UUID = 123123
 
 
@@ -159,12 +158,6 @@ def trace_yield(block_name: str) -> Callable[[F], F]:
 
 
 TRACER = Tracer()
-
-
-@trace("convert_col_to_rows")
-def convert_columns_to_rows(cols: Columns, schema: Schema) -> Iterable[Row]:
-    for row in zip(*cols, strict=True):
-        yield {name: val for val, (name, _) in zip(row, schema, strict=True)}
 
 
 def chunk_list[T](lst: list[T], n_chunks: int) -> list[list[T]]:

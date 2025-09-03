@@ -8,6 +8,28 @@ OutputFileTuple = tuple[str, str, int]
 JobResultTuple = tuple[str, str, list[OutputFileTuple]]
 
 
+@dataclass
+class Job:
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        self.id = str(uuid4())
+
+
+@dataclass
+class JobResult:
+    job_id: str
+    executor_id: str
+    output_files: list[OutputFile]
+
+    @staticmethod
+    def from_tuple(t: JobResultTuple) -> JobResult:
+        return JobResult(t[0], t[1], [OutputFile.from_tuple(f) for f in t[2]])
+
+    def to_tuple(self) -> JobResultTuple:
+        return (self.job_id, self.executor_id, [f.to_tuple() for f in self.output_files])
+
+
 @dataclass(frozen=True)
 class OutputFile:
     executor_id: str
@@ -20,14 +42,6 @@ class OutputFile:
 
     def to_tuple(self) -> OutputFileTuple:
         return (self.executor_id, str(self.file_path), self.partition)
-
-
-@dataclass
-class Job:
-    id: str = ""
-
-    def __post_init__(self) -> None:
-        self.id = str(uuid4())
 
 
 @dataclass(kw_only=True)
@@ -45,17 +59,3 @@ class LoadShuffleFilesJob(Job):
 class JoinJob(Job):
     left_shuffle_files: list[OutputFile]
     right_shuffle_files: list[OutputFile]
-
-
-@dataclass
-class JobResult:
-    job_id: str
-    executor_id: str
-    output_files: list[OutputFile]
-
-    @staticmethod
-    def from_tuple(t: JobResultTuple) -> JobResult:
-        return JobResult(t[0], t[1], [OutputFile.from_tuple(f) for f in t[2]])
-
-    def to_tuple(self) -> JobResultTuple:
-        return (self.job_id, self.executor_id, [f.to_tuple() for f in self.output_files])

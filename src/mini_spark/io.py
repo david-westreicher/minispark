@@ -20,13 +20,6 @@ MAX_COLUMNS = 0xFF
 MAX_STR_LENGTH = 0xFF
 
 
-def validate(schema: Schema, data: list[Row]) -> None:
-    for row in data:
-        assert len(row) == len(schema)
-        for (_, col_type), value in zip(schema, row, strict=True):
-            assert col_type.type is type(value)
-
-
 def to_unsigned_int(value: int) -> bytes:
     return value.to_bytes(4, byteorder="little", signed=False)
 
@@ -220,15 +213,6 @@ class BlockFile:
         columns_data = tuple([row[col_name] for row in data] for (col_name, _) in schema)
         return self.append_data(columns_data)
 
-    def read_data(self) -> Iterable[tuple[Any, ...]]:
-        schema = self.file_schema
-        block_starts = self.block_starts
-        with self.file.open("rb") as f:
-            for block_start in block_starts:
-                f.seek(block_start)
-                block_data = _deserialize_block(f, schema)
-                yield from zip(*block_data, strict=True)
-
     def read_data_rows(self) -> Iterable[Row]:
         for block in self.read_blocks_sequentially():
             yield from block
@@ -243,12 +227,6 @@ class BlockFile:
         with self.file.open("rb") as f:
             f.seek(block_start)
             return _deserialize_block(f, schema)
-
-    def read_block_rows(self, block_id: int) -> Iterable[Row]:
-        schema = self.file_schema
-        block_start = self.block_starts[block_id]
-        for row in self.read_block_data(block_start):
-            yield {col_name: row[col_idx] for col_idx, (col_name, _) in enumerate(schema)}
 
     def read_blocks_sequentially(self) -> Iterable[list[Row]]:
         schema = self.file_schema
