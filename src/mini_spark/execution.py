@@ -16,8 +16,7 @@ from typing import TYPE_CHECKING, Self
 import rpyc
 from rpyc import Connection, OneShotServer, Service
 
-from mini_spark.codegen import compile_plan
-
+from .codegen2 import compile_plan
 from .constants import WORKER_POOL_PROCESSES
 from .io import BlockFile
 from .jobs import Job, JobResult, JobResultTuple, OutputFile, ScanJob
@@ -183,7 +182,7 @@ def execute_job(job: DistributedJob) -> JobResult:
     worker_id = multiprocessing.current_process().name
     trace_file = (job.executor_binary.parent / f"trace-{job.id}").absolute()
     TRACER.add_trace_file(trace_file, worker_id)
-    subprocess.call(  # noqa: S603
+    ret_code = subprocess.call(  # noqa: S603
         [
             str(job.executor_binary),
             str(job.stage_id),
@@ -191,8 +190,9 @@ def execute_job(job: DistributedJob) -> JobResult:
             str(job.input_block_id),
             str(job.output_file.absolute()),
             str(trace_file),
-        ]
+        ],
     )
+    assert ret_code == 0, f"executor: job {job.id} failed with code {ret_code}"
     # TODO(david): we should parse which files the executor actually created
     output_files = [OutputFile(executor_id="", file_path=job.output_file, partition=0)]
     return JobResult(job_id=job.id, executor_id="", output_files=output_files)

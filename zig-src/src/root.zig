@@ -202,7 +202,7 @@ pub const ColumnData = union(enum) {
                 const string_buffer = try allocator.alloc(u8, total_length);
                 try reader.interface.readSliceAll(string_buffer);
 
-                const string_columns = try allocator.alloc([]const u8, total_length);
+                const string_columns = try allocator.alloc([]const u8, row_count);
                 var offset: u32 = 0;
                 for (lengths, 0..) |length, i| {
                     string_columns[i] = string_buffer[offset .. offset + length];
@@ -385,11 +385,7 @@ pub fn test_write_file(allocator: std.mem.Allocator) !void {
     try bf.writeData(file, block);
 }
 
-pub fn filter_column(col: ColumnData, condition_col: []const bool, allocator: std.mem.Allocator) !ColumnData {
-    var output_rows: usize = 0;
-    for (condition_col) |c| {
-        if (c) output_rows += 1;
-    }
+pub fn filter_column(col: ColumnData, condition_col: []const bool, output_rows: usize, allocator: std.mem.Allocator) !ColumnData {
     switch (col) {
         .I32 => |vals| {
             const filtered_vals = try allocator.alloc(i32, output_rows);
