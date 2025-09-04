@@ -29,9 +29,9 @@ JoinType = Literal["inner", "left", "right", "outer"]
 
 
 @trace("project_col")
-def project_column(col: Col, input_columns: Columns, schema: Schema) -> list[Any]:
+def project_column(col: Col, chunk: Columns, schema: Schema) -> list[Any]:
     col = col.schema_executor(schema)
-    return [col.execute_row(row) for row in zip(*input_columns, strict=True)]
+    return [col.execute_row(row) for row in zip(*chunk, strict=True)]
 
 
 @dataclass
@@ -56,19 +56,19 @@ class Task(ABC):
 @dataclass(kw_only=True)
 class ProducerTask(Task):
     @abstractmethod
-    def generate_blocks(self, job: Job) -> Iterable[Columns]: ...
+    def generate_chunks(self, job: Job) -> Iterable[tuple[Columns | None, bool]]: ...
 
 
 @dataclass(kw_only=True)
 class ConsumerTask(Task):
     @abstractmethod
-    def execute(self, input_columns: Columns) -> Columns: ...
+    def execute(self, chunk: Columns | None, *, is_last: bool) -> tuple[Columns | None, bool]: ...
 
 
 @dataclass(kw_only=True)
 class WriterTask(Task):
     @abstractmethod
-    def write(self, input_columns: Columns, stage_id: str) -> list[OutputFile]: ...
+    def write(self, chunk: Columns | None, stage_id: str) -> list[OutputFile]: ...
 
 
 @dataclass(kw_only=True)
@@ -76,9 +76,11 @@ class ProjectTask(ConsumerTask):
     columns: list[Col]
 
     @trace("ProjectTask")
-    def execute(self, input_columns: Columns) -> Columns:
+    def execute(self, chunk: Columns | None, *, is_last: bool) -> tuple[Columns | None, bool]:
+        if chunk is None:
+            return None, is_last
         assert self.parent_task.inferred_schema is not None
-        return tuple(project_column(col, input_columns, self.parent_task.inferred_schema) for col in self.columns)
+        return tuple(project_column(col, chunk, self.parent_task.inferred_schema) for col in self.columns), is_last
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -111,9 +113,9 @@ class LoadTableBlockTask(ProducerTask):
     file_path: Path
 
     @trace_yield("LoadTableBlockTask")
-    def generate_blocks(self, job: Job) -> Iterable[Columns]:
+    def generate_chunks(self, job: Job) -> Iterable[tuple[Columns | None, bool]]:
         assert type(job) is ScanJob
-        yield BlockFile(job.file_path).read_block_data_columns_by_id(job.block_id)
+        yield BlockFile(job.file_path).read_block_data_columns_by_id(job.block_id), True
 
     @cached_property
     def file_schema(self) -> Schema:
@@ -134,18 +136,18 @@ class LoadTableBlockTask(ProducerTask):
 
 @dataclass(kw_only=True)
 class LoadShuffleFilesTask(ProducerTask):
-    stage_to_load: int = -1
-
     @trace_yield("LoadShuffleFileTask")
-    def generate_blocks(self, job: Job) -> Iterable[Columns]:
+    def generate_chunks(self, job: Job) -> Iterable[tuple[Columns | None, bool]]:
         assert type(job) is LoadShuffleFilesJob
         for shuffle_file in job.shuffle_files:
-            yield from BlockFile(shuffle_file.file_path).read_block_data_columns_sequentially()
+            for block in BlockFile(shuffle_file.file_path).read_block_data_columns_sequentially():
+                yield block, False
+        yield None, True
 
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(  # noqa: T201
-            f"{indent} LoadShuffleFile(stage_to_load={self.stage_to_load}):{nice_schema(self.inferred_schema)}",
+            f"{indent} LoadShuffleFile():{nice_schema(self.inferred_schema)}",
         )
         self.parent_task.explain(lvl + 1)
 
@@ -158,14 +160,16 @@ class FilterTask(ConsumerTask):
         assert type(self.condition) is BinaryOperatorColumn, type(self.condition)
 
     @trace("FilterTask")
-    def execute(self, input_columns: Columns) -> Columns:
+    def execute(self, chunk: Columns | None, *, is_last: bool) -> tuple[Columns | None, bool]:
+        if chunk is None:
+            return None, is_last
         assert self.parent_task.inferred_schema is not None
         condition_col = project_column(
             self.condition,
-            input_columns,
+            chunk,
             self.parent_task.inferred_schema,
         )
-        return tuple([val for val, cond in zip(col, condition_col, strict=True) if cond] for col in input_columns)
+        return tuple([val for val, cond in zip(col, condition_col, strict=True) if cond] for col in chunk), is_last
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -187,13 +191,11 @@ class JoinTask(ProducerTask):
     right_side_task: Task
     join_condition: Col
     how: JoinType = "inner"
-    left_shuffle_stage: int = -1
-    right_shuffle_stage: int = -1
     left_key: Col | None = None
     right_key: Col | None = None
 
     @trace_yield("JoinTask")
-    def generate_blocks(self, job: Job) -> Iterable[Columns]:
+    def generate_chunks(self, job: Job) -> Iterable[tuple[Columns | None, bool]]:
         assert self.left_key
         assert self.right_key
         assert type(job) is JoinJob
@@ -223,7 +225,7 @@ class JoinTask(ProducerTask):
             right_sorted_file.unlink(missing_ok=True)
         assert self.inferred_schema
         # TODO(david): should be chunked, not all data at once
-        yield convert_rows_to_columns(joined_rows, self.inferred_schema)
+        yield convert_rows_to_columns(joined_rows, self.inferred_schema), True
 
     @trace("Sort shuffle file")
     def sort_shuffle_files(self, shuffle_files: list[Path], key: Col) -> Path | None:
@@ -250,8 +252,7 @@ class JoinTask(ProducerTask):
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(  # noqa: T201
-            f'{indent} Join({self.join_condition}, "{self.how}", left_shuffle: {self.left_shuffle_stage}'
-            f", right_shuffle: {self.right_shuffle_stage}):{nice_schema(self.inferred_schema)}",
+            f'{indent} Join({self.join_condition}, "{self.how}"):{nice_schema(self.inferred_schema)}'
         )
         self.parent_task.explain(lvl + 1)
         self.right_side_task.explain(lvl + 1)
@@ -263,15 +264,18 @@ class AggregateCountTask(ConsumerTask):
     counter: dict[Any, int] = field(default_factory=lambda: Counter())
 
     @trace("AggregateCountTask")
-    def execute(self, input_columns: Columns) -> Columns:
-        assert self.parent_task.inferred_schema is not None
-        group_column = project_column(
-            self.group_by_column,
-            input_columns,
-            self.parent_task.inferred_schema,
-        )
-        counts = Counter(group_column)
-        return (list(counts.keys()), list(counts.values()))
+    def execute(self, chunk: Columns | None, *, is_last: bool) -> tuple[Columns | None, bool]:
+        if not is_last:
+            assert chunk is not None
+            assert self.parent_task.inferred_schema is not None
+            group_column = project_column(
+                self.group_by_column,
+                chunk,
+                self.parent_task.inferred_schema,
+            )
+            self.counter |= Counter(group_column)
+            return None, False
+        return (list(self.counter.keys()), list(self.counter.values())), True
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -292,16 +296,18 @@ class WriteToShufflePartitions(WriterTask):
     key_column: Col | None = None
 
     @trace("WriteToShufflePartitions")
-    def write(self, input_columns: Columns, stage_id: str) -> list[OutputFile]:
+    def write(self, chunk: Columns | None, stage_id: str) -> list[OutputFile]:
+        if chunk is None:
+            return []
         assert self.key_column is not None
         assert self.parent_task.inferred_schema is not None
         key_column = project_column(
             self.key_column,
-            input_columns,
+            chunk,
             self.parent_task.inferred_schema,
         )
         final_output: tuple[list[list[Any]], ...] = tuple([] for _ in range(SHUFFLE_PARTITIONS))
-        for col in input_columns:
+        for col in chunk:
             col_buckets: tuple[list[Any], ...] = tuple([] for _ in range(SHUFFLE_PARTITIONS))
             for val, key in zip(col, key_column, strict=True):
                 destination = hash(key) % SHUFFLE_PARTITIONS
@@ -343,13 +349,15 @@ class WriteToShufflePartitions(WriterTask):
 @dataclass(kw_only=True)
 class WriteToLocalFileTask(WriterTask):
     @trace("WriteToLocalFileTask")
-    def write(self, input_columns: Columns, stage_id: str) -> list[OutputFile]:
+    def write(self, chunk: Columns | None, stage_id: str) -> list[OutputFile]:
+        if chunk is None:
+            return []
         assert self.parent_task.inferred_schema is not None
-        if len(input_columns) == 0 or len(input_columns[0]) == 0:
+        if len(chunk) == 0 or len(chunk[0]) == 0:
             return []
         output_file = Path(SHUFFLE_FOLDER / stage_id / "result.bin")
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        BlockFile(output_file, schema=self.parent_task.inferred_schema).append_data(input_columns)
+        BlockFile(output_file, schema=self.parent_task.inferred_schema).append_data(chunk)
         return [OutputFile("local", output_file)]
 
     def explain(self, lvl: int = 0) -> None:

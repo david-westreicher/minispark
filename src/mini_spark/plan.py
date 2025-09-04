@@ -47,14 +47,21 @@ class Stage:
 
     @trace("job")
     def execute(self, job: Job) -> JobResult:
-        job_result = JobResult(job.id, "local", [])
-        for input_block in self.producer.generate_blocks(job):
-            last_output = input_block
-            for consumer in self.consumers:
-                last_output = consumer.execute(last_output)
-            written_files = self.writer.write(last_output, self.stage_id)
-            job_result.output_files += written_files
+        job_result = deepcopy(self)._execute(job)  # We deepcopy to reset the state of all tasks # noqa: SLF001
         self.job_results.append(job_result)
+        return job_result
+
+    def _execute(self, job: Job) -> JobResult:
+        job_result = JobResult(job.id, "local", [])
+        block_generator = iter(self.producer.generate_chunks(job))
+        while True:
+            chunk, is_last = next(block_generator)
+            for consumer in self.consumers:
+                chunk, is_last = consumer.execute(chunk, is_last=is_last)
+            written_files = self.writer.write(chunk, self.stage_id)
+            job_result.output_files += written_files
+            if is_last:
+                break
         return job_result
 
     def create_jobs(self) -> Iterable[Job]:
