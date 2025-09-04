@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Self
 import rpyc
 from rpyc import Connection, OneShotServer, Service
 
-from .codegen2 import compile_plan
+from .codegen import compile_plan
 from .constants import WORKER_POOL_PROCESSES
 from .io import BlockFile
 from .jobs import Job, JobResult, JobResultTuple, OutputFile, ScanJob

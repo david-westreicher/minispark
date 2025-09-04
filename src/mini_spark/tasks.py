@@ -42,9 +42,6 @@ class Task(ABC):
     @abstractmethod
     def explain(self, lvl: int = 0) -> None: ...
 
-    @abstractmethod
-    def generate_zig_code(self, function_name: str) -> str: ...
-
     def validate_schema(self) -> Schema:
         return self.parent_task.validate_schema()
 
@@ -83,52 +80,6 @@ class ProjectTask(ConsumerTask):
         assert self.parent_task.inferred_schema is not None
         return tuple(project_column(col, input_columns, self.parent_task.inferred_schema) for col in self.columns)
 
-    def generate_zig_code(self, function_name: str) -> str:
-        def generate_projection_functions() -> str:
-            assert self.parent_task.inferred_schema is not None
-            projections_code = [
-                col.generate_zig_projection_function(
-                    f"{function_name}_project_{col_num:0>2}",
-                    self.parent_task.inferred_schema,
-                )
-                for col_num, col in enumerate(self.columns)
-            ]
-            return "\n".join(projections_code)
-
-        def generate_projection_calls() -> str:
-            assert self.parent_task.inferred_schema is not None
-            code = [
-                f"const slice: []ColumnData = try allocator.alloc(ColumnData, {len(self.columns)});",
-                *[
-                    f"""
-                        const col_{col_num:0>2} = try allocator.alloc({
-                        col.infer_type(self.parent_task.inferred_schema).native_zig_type
-                    }, rows);
-                        slice[{col_num}] = try {function_name}_project_{col_num:0>2}(
-                            allocator, input, col_{col_num:0>2});
-                    """
-                    for col_num, col in enumerate(self.columns)
-                ],
-            ]
-            return "\n".join(code)
-
-        return f"""
-        {generate_projection_functions()}
-        pub fn {function_name}(
-            allocator: std.mem.Allocator,
-            input: []const ColumnData,
-            job: Job,
-            schema: []const ColumnSchema) ![]const ColumnData {{
-            try Executor.GLOBAL_TRACER.startEvent("{function_name}");
-            _ = job;
-            _ = schema;
-            const rows = input[0].len();
-            {generate_projection_calls()}
-            try Executor.GLOBAL_TRACER.endEvent("{function_name}");
-            return slice;
-        }}
-        """
-
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
         # expand * to all columns from previous schema
@@ -164,24 +115,6 @@ class LoadTableBlockTask(ProducerTask):
         assert type(job) is ScanJob
         yield BlockFile(job.file_path).read_block_data_columns_by_id(job.block_id)
 
-    def generate_zig_code(self, function_name: str) -> str:
-        return f"""
-            pub fn {function_name}(
-                allocator: std.mem.Allocator,
-                input: []const ColumnData,
-                job: Job,
-                schema: []const ColumnSchema) ![]const ColumnData {{
-                try Executor.GLOBAL_TRACER.startEvent("{function_name}");
-                _ = input;
-                _ = schema;
-                const block_file = try Executor.BlockFile.initFromFile(allocator, job.input_file);
-                const data = try block_file.readBlock(job.input_block_id);
-                try Executor.GLOBAL_TRACER.endEvent("{function_name}");
-                return data;
-            }}
-
-        """
-
     @cached_property
     def file_schema(self) -> Schema:
         return BlockFile(self.file_path).file_schema
@@ -209,9 +142,6 @@ class LoadShuffleFilesTask(ProducerTask):
         for shuffle_file in job.shuffle_files:
             yield from BlockFile(shuffle_file.file_path).read_block_data_columns_sequentially()
 
-    def generate_zig_code(self, function_name: str) -> str:
-        raise NotImplementedError
-
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(  # noqa: T201
@@ -236,39 +166,6 @@ class FilterTask(ConsumerTask):
             self.parent_task.inferred_schema,
         )
         return tuple([val for val, cond in zip(col, condition_col, strict=True) if cond] for col in input_columns)
-
-    def generate_zig_code(self, function_name: str) -> str:
-        condition_function_name = f"{function_name}_condition"
-
-        def generate_condition_function() -> str:
-            assert self.parent_task.inferred_schema is not None
-            return self.condition.generate_zig_condition_function(
-                condition_function_name,
-                self.parent_task.inferred_schema,
-            )
-
-        return f"""
-            {generate_condition_function()}
-            pub fn {function_name}(
-                allocator: std.mem.Allocator,
-                input: []const ColumnData,
-                job: Job,
-                schema: []const ColumnSchema) ![]const ColumnData {{
-                try Executor.GLOBAL_TRACER.startEvent("{function_name}");
-                _ = job;
-                _ = schema;
-                const rows = input[0].len();
-                const condition_col = try allocator.alloc(bool, rows);
-                {condition_function_name}(allocator, input, condition_col);
-                const slice: []ColumnData = try allocator.alloc(ColumnData, input.len);
-                for (input, 0..) |col, col_idx| {{
-                    const filtered_column = try Executor.filter_column(col, condition_col, allocator);
-                    slice[col_idx] = filtered_column;
-                }}
-                try Executor.GLOBAL_TRACER.endEvent("{function_name}");
-                return slice;
-            }}
-        """
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -340,9 +237,6 @@ class JoinTask(ProducerTask):
         tmp_file.unlink(missing_ok=True)
         return output_file
 
-    def generate_zig_code(self, function_name: str) -> str:
-        raise NotImplementedError
-
     def validate_schema(self) -> Schema:
         left_schema = self.parent_task.validate_schema()
         right_schema = self.right_side_task.validate_schema()
@@ -378,9 +272,6 @@ class AggregateCountTask(ConsumerTask):
         )
         counts = Counter(group_column)
         return (list(counts.keys()), list(counts.values()))
-
-    def generate_zig_code(self, function_name: str) -> str:
-        raise NotImplementedError
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
@@ -428,9 +319,6 @@ class WriteToShufflePartitions(WriterTask):
             shuffle_files.append(OutputFile("local", shuffle_file, partition))
         return shuffle_files
 
-    def generate_zig_code(self, function_name: str) -> str:
-        raise NotImplementedError
-
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
         if self.key_column is None:
@@ -464,23 +352,6 @@ class WriteToLocalFileTask(WriterTask):
         BlockFile(output_file, schema=self.parent_task.inferred_schema).append_data(input_columns)
         return [OutputFile("local", output_file)]
 
-    def generate_zig_code(self, function_name: str) -> str:
-        # TODO(david): should be append, not write
-        return f"""
-            pub fn {function_name}(
-                allocator: std.mem.Allocator,
-                input: []const ColumnData,
-                job: Job,
-                schema: []const ColumnSchema) ![]const ColumnData {{
-                try Executor.GLOBAL_TRACER.startEvent("{function_name}");
-                var block_file = try Executor.BlockFile.init(allocator, schema);
-                const block = Executor.Block{{ .cols = input }};
-                try block_file.writeData(job.output_file, block);
-                try Executor.GLOBAL_TRACER.endEvent("{function_name}");
-                return (&[_]ColumnData{{}})[0..];
-            }}
-        """
-
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
         print(  # noqa: T201
@@ -492,9 +363,6 @@ class WriteToLocalFileTask(WriterTask):
 @dataclass
 class VoidTask(Task):
     parent_task: Task | None = None  # type:ignore[assignment]
-
-    def generate_zig_code(self, function_name: str) -> str:
-        raise NotImplementedError
 
     def validate_schema(self) -> Schema:
         return []

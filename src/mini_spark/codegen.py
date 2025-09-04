@@ -1,8 +1,23 @@
 import subprocess
+from collections.abc import Iterable
+from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
+
+from jinja2 import Environment
 
 from .constants import Schema
 from .plan import PhysicalPlan, Stage
+from .sql import Col
+from .tasks import (
+    ConsumerTask,
+    FilterTask,
+    LoadTableBlockTask,
+    ProducerTask,
+    ProjectTask,
+    WriterTask,
+    WriteToLocalFileTask,
+)
 from .utils import trace
 
 STAGES_FILE = Path("zig-src/src/stage.zig")
@@ -14,28 +29,127 @@ class CompileError(Exception):
         super().__init__(message)
 
 
+@dataclass
+class JinjaColumnReference:
+    name: str
+    pos: int
+    type: str
+    struct_type: str
+
+
+class JinjaColumn:
+    def __init__(self, column: Col, function_name: str, input_schema: Schema, *, is_condition: bool = False) -> None:
+        self.function_name = function_name
+        if not is_condition:
+            output_type = column.infer_type(input_schema)
+            self.zig_type = output_type.native_zig_type
+            self.struct_type = output_type.zig_type
+        referenced_columns = {col.name for col in column.all_nested_columns}
+        self.references = [
+            JinjaColumnReference(col_name, col_pos, col_type.native_zig_type, col_type.zig_type)
+            for col_pos, (col_name, col_type) in enumerate(input_schema)
+            if col_name in referenced_columns
+        ]
+        self.column_names = ",".join(f"col_{ref.name}" for ref in self.references)
+        self.names = ",".join(ref.name for ref in self.references)
+        self.zig_code = column.zig_code_representation(input_schema)
+
+
+class JinjaProducer:
+    def __init__(self, producer: ProducerTask, function_name: str) -> None:
+        self.function_name = function_name
+        self.is_load_table_block = type(producer) is LoadTableBlockTask
+
+    def get_projection_columns(self) -> Iterable[JinjaColumn]:
+        return []
+
+
+class JinjaConsumer:
+    def __init__(self, consumer: ConsumerTask, function_name: str) -> None:
+        self.function_name = function_name
+        self.is_select = type(consumer) is ProjectTask
+        self.is_filter = type(consumer) is FilterTask
+        self.projection_columns = []
+        self.condition_columns = []
+        assert consumer.parent_task.inferred_schema is not None
+        if self.is_select:
+            assert type(consumer) is ProjectTask
+            self.input_columns = len(consumer.columns)
+            self.projection_columns = [
+                JinjaColumn(
+                    column,
+                    f"{function_name}_project_{i}",
+                    consumer.parent_task.inferred_schema,
+                )
+                for i, column in enumerate(consumer.columns)
+            ]
+            self.columns = self.projection_columns
+        if self.is_filter:
+            assert type(consumer) is FilterTask
+            self.condition = JinjaColumn(
+                consumer.condition,
+                f"{function_name}_condition",
+                consumer.parent_task.inferred_schema,
+                is_condition=True,
+            )
+            self.condition_columns = [self.condition]
+
+    def get_projection_columns(self) -> Iterable[JinjaColumn]:
+        yield from self.projection_columns
+
+    def get_condition_columns(self) -> Iterable[JinjaColumn]:
+        yield from self.condition_columns
+
+
+class JinjaWriter:
+    def __init__(self, writer: WriterTask, function_name: str) -> None:
+        self.function_name = function_name
+        self.is_write_local_file = type(writer) is WriteToLocalFileTask
+        assert writer.inferred_schema is not None
+        self.output_schema = writer.inferred_schema
+
+    def get_projection_columns(self) -> Iterable[JinjaColumn]:
+        return []
+
+
+class JinjaStage:
+    def __init__(self, stage: Stage) -> None:
+        nice_stage_id = f"{int(stage.stage_id):>02}"
+        self.function_name = f"run_stage_{nice_stage_id}"
+        self.name = f"stage_{nice_stage_id}"
+        self.id = stage.stage_id
+        producer_function_name = f"stage_{nice_stage_id}_{stage.producer.__class__.__name__}"
+        self.producer = JinjaProducer(stage.producer, producer_function_name)
+        self.consumers = [
+            JinjaConsumer(consumer, f"stage_{nice_stage_id}_{i}_{consumer.__class__.__name__}")
+            for i, consumer in enumerate(stage.consumers)
+        ]
+        writer_function_name = f"stage_{nice_stage_id}_{stage.writer.__class__.__name__}"
+        self.writer = JinjaWriter(stage.writer, writer_function_name)
+
+    def get_projection_columns(self) -> Iterable[JinjaColumn]:
+        yield from self.producer.get_projection_columns()
+        for consumer in self.consumers:
+            yield from consumer.get_projection_columns()
+        yield from self.writer.get_projection_columns()
+
+    def get_condition_columns(self) -> Iterable[JinjaColumn]:
+        for consumer in self.consumers:
+            yield from consumer.get_condition_columns()
+
+
+class JinjaPlan:
+    def __init__(self, plan: PhysicalPlan) -> None:
+        self.stages = [JinjaStage(stage) for stage in plan.stages]
+        self.projection_columns = [projection for stage in self.stages for projection in stage.get_projection_columns()]
+        self.condition_columns = [condition for stage in self.stages for condition in stage.get_condition_columns()]
+
+
 @trace("compile stages")
 def compile_plan(physical_plan: PhysicalPlan) -> Path:
-    code_buffer = [
-        'const std = @import("std");',
-        'const Executor = @import("executor");',
-        'const ColumnData = @import("executor").ColumnData;',
-        'const ColumnSchema = @import("executor").ColumnSchema;',
-        'const Job = @import("executor").Job;',
-        'const Tracer = @import("executor").GLOBAL_TRACER;',
-    ]
-    for stage_num, stage in enumerate(physical_plan.stages):
-        code_buffer.extend(compile_stage(stage, stage_num))
-
-    def create_stages_array() -> list[str]:
-        return [
-            "pub const STAGES: []const *const fn (std.mem.Allocator, Job) anyerror!void = &.{",
-            *[f"run_stage_{stage_num:0>2}," for stage_num in range(len(physical_plan.stages))],
-            "};",
-        ]
-
-    code_buffer.extend(create_stages_array())
-    final_code = "\n".join(code_buffer)
+    template_str = resources.read_text("mini_spark.templates", "plan.zig")
+    template = Environment().from_string(template_str)  # noqa: S701
+    final_code = template.render(plan=JinjaPlan(physical_plan))
     with STAGES_FILE.open("w", encoding="utf-8") as f:
         f.write(final_code)
     result = subprocess.run(
@@ -48,57 +162,3 @@ def compile_plan(physical_plan: PhysicalPlan) -> Path:
     if result.stderr:
         raise CompileError(result.stderr)
     return STAGES_BINARY_OUTPUT
-
-
-def compile_stage(stage: Stage, stage_num: int) -> list[str]:
-    generated_code = []
-    stage_function_names = []
-    schema_codes = []
-    # TODO(david): Make gencode nicer: use producer, consumer, writer code
-    task_chain = [stage.producer, *stage.consumers, stage.writer]
-
-    def generate_schema_code(schema: Schema) -> str:
-        schema_code = [
-            "(&[_]ColumnSchema{",
-            *[
-                f'.{{ .typ = Executor.TYPE_{col_type.zig_type.upper()}, .name = "{col_name}" }},'
-                for col_name, col_type in schema
-            ],
-            "})[0..];",
-        ]
-        return "\n".join(schema_code)
-
-    for task_num, task in enumerate(task_chain):
-        function_name = f"stage_{stage_num}_task_{task_num}_{task.__class__.__name__}"
-        function_code = task.generate_zig_code(function_name)
-        generated_code.append(function_code)
-        stage_function_names.append(function_name)
-        assert task.inferred_schema is not None
-        schema_codes.append(generate_schema_code(task.inferred_schema))
-
-    # TODO(david): producer should generate chunks, writer needs (schema, job), producer needs job
-    def generate_task_calls() -> str:
-        generated_code = []
-        func_num = 0
-        for func_num, func_name in enumerate(stage_function_names):
-            generated_code.extend(
-                [
-                    f"const schema_{func_num:0>2} = {schema_codes[func_num]}",
-                    f"const last_input_{func_num + 1:0>2} = try {func_name}("
-                    f"allocator, last_input_{func_num:0>2}, job, schema_{func_num:0>2});",
-                ]
-            )
-
-        generated_code.append(f"_ = last_input_{func_num + 1:0>2};")
-        return "\n".join(generated_code)
-
-    run_stage_code = f"""
-        pub fn run_stage_{stage_num:0>2}(allocator: std.mem.Allocator, job: Job) !void {{
-            try Executor.GLOBAL_TRACER.startEvent("stage_{stage_num}");
-            const last_input_00 = &[_]ColumnData{{}};
-            {generate_task_calls()}
-            try Executor.GLOBAL_TRACER.endEvent("stage_{stage_num}");
-        }}
-    """
-    generated_code.append(run_stage_code)
-    return generated_code

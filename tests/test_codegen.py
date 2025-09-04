@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from mini_spark.codegen2 import compile_plan
+from mini_spark.codegen import compile_plan
 from mini_spark.dataframe import DataFrame
 from mini_spark.io import BlockFile
 from mini_spark.plan import PhysicalPlan
