@@ -10,13 +10,16 @@ from .constants import Schema
 from .plan import PhysicalPlan, Stage
 from .sql import Col
 from .tasks import (
+    AggregateCountTask,
     ConsumerTask,
     FilterTask,
+    LoadShuffleFilesTask,
     LoadTableBlockTask,
     ProducerTask,
     ProjectTask,
     WriterTask,
     WriteToLocalFileTask,
+    WriteToShufflePartitions,
 )
 from .utils import trace
 
@@ -59,9 +62,7 @@ class JinjaProducer:
     def __init__(self, producer: ProducerTask, function_name: str) -> None:
         self.function_name = function_name
         self.is_load_table_block = type(producer) is LoadTableBlockTask
-
-    def get_projection_columns(self) -> Iterable[JinjaColumn]:
-        return []
+        self.is_load_shuffles = type(producer) is LoadShuffleFilesTask
 
 
 class JinjaConsumer:
@@ -69,6 +70,7 @@ class JinjaConsumer:
         self.function_name = function_name
         self.is_select = type(consumer) is ProjectTask
         self.is_filter = type(consumer) is FilterTask
+        self.is_count_aggregate = type(consumer) is AggregateCountTask
         self.projection_columns = []
         self.condition_columns = []
         assert consumer.parent_task.inferred_schema is not None
@@ -93,6 +95,12 @@ class JinjaConsumer:
                 is_condition=True,
             )
             self.condition_columns = [self.condition]
+        if self.is_count_aggregate:
+            assert type(consumer) is AggregateCountTask
+            self.class_name = function_name
+            self.object_name = f"{self.class_name}_obj"
+            self.function_name = f"{self.object_name}.next"
+            self.group_column = JinjaColumn(consumer.group_by_column, "", consumer.parent_task.inferred_schema)
 
     def get_projection_columns(self) -> Iterable[JinjaColumn]:
         yield from self.projection_columns
@@ -105,11 +113,18 @@ class JinjaWriter:
     def __init__(self, writer: WriterTask, function_name: str) -> None:
         self.function_name = function_name
         self.is_write_local_file = type(writer) is WriteToLocalFileTask
+        self.is_write_shuffle = type(writer) is WriteToShufflePartitions
         assert writer.inferred_schema is not None
         self.output_schema = writer.inferred_schema
+        self.hash_columns = []
+        if self.is_write_shuffle:
+            assert type(writer) is WriteToShufflePartitions
+            assert writer.key_column is not None
+            self.hash_column = JinjaColumn(writer.key_column, f"{function_name}_hash_column", writer.inferred_schema)
+            self.hash_columns = [self.hash_column]
 
-    def get_projection_columns(self) -> Iterable[JinjaColumn]:
-        return []
+    def get_hash_columns(self) -> Iterable[JinjaColumn]:
+        yield from self.hash_columns
 
 
 class JinjaStage:
@@ -128,14 +143,15 @@ class JinjaStage:
         self.writer = JinjaWriter(stage.writer, writer_function_name)
 
     def get_projection_columns(self) -> Iterable[JinjaColumn]:
-        yield from self.producer.get_projection_columns()
         for consumer in self.consumers:
             yield from consumer.get_projection_columns()
-        yield from self.writer.get_projection_columns()
 
     def get_condition_columns(self) -> Iterable[JinjaColumn]:
         for consumer in self.consumers:
             yield from consumer.get_condition_columns()
+
+    def get_hash_columns(self) -> Iterable[JinjaColumn]:
+        yield from self.writer.get_hash_columns()
 
 
 class JinjaPlan:
@@ -143,12 +159,13 @@ class JinjaPlan:
         self.stages = [JinjaStage(stage) for stage in plan.stages]
         self.projection_columns = [projection for stage in self.stages for projection in stage.get_projection_columns()]
         self.condition_columns = [condition for stage in self.stages for condition in stage.get_condition_columns()]
+        self.hash_columns = [hash_col for stage in self.stages for hash_col in stage.get_hash_columns()]
 
 
 @trace("compile stages")
 def compile_plan(physical_plan: PhysicalPlan) -> Path:
     template_str = resources.read_text("mini_spark.templates", "plan.zig")
-    template = Environment().from_string(template_str)  # noqa: S701
+    template = Environment(block_start_string="//{%").from_string(template_str)  # noqa: S701
     final_code = template.render(plan=JinjaPlan(physical_plan))
     with STAGES_FILE.open("w", encoding="utf-8") as f:
         f.write(final_code)

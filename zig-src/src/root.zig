@@ -1,5 +1,6 @@
 const std = @import("std");
 
+pub const PARTITIONS = 16;
 pub const TYPE_I32: u8 = 0;
 pub const TYPE_STR: u8 = 1;
 
@@ -66,13 +67,14 @@ pub var GLOBAL_TRACER: Tracer = undefined;
 
 pub const Job = struct {
     stage_id: u32 = 0,
-    input_file: []const u8,
-    input_block_id: u32,
     output_file: []const u8,
     trace_file: []const u8,
+    input_file: []const u8 = undefined,
+    input_block_id: u32 = undefined,
+    shuffle_files: [][]const u8 = undefined,
 
     pub fn fromArgs(it: *std.process.ArgIterator) !Job {
-        var args: [5][]const u8 = undefined; // we need exactly 3 arguments
+        var args: [1024][]const u8 = undefined;
         var idx: usize = 0;
 
         while (it.next()) |arg| {
@@ -80,20 +82,27 @@ pub const Job = struct {
                 idx += 1;
                 continue;
             }
-            if (idx > 5) break; // ignore extra args
             args[idx - 1] = arg;
             idx += 1;
         }
 
-        if (idx - 1 != 5) return error.InvalidArgs;
-
-        return Job{
+        var job = Job{
             .stage_id = try std.fmt.parseInt(u32, args[0], 10),
-            .input_file = args[1],
-            .input_block_id = try std.fmt.parseInt(u32, args[2], 10),
-            .output_file = args[3],
-            .trace_file = args[4],
+            .output_file = args[1],
+            .trace_file = args[2],
         };
+        const job_type = try std.fmt.parseInt(u32, args[3], 10);
+        if (job_type == 0) {
+            job.input_file = args[4];
+            job.input_block_id = try std.fmt.parseInt(u32, args[5], 10);
+            return job;
+        }
+        if (job_type == 1) {
+            const shuffle_files_num = try std.fmt.parseInt(u32, args[4], 10);
+            job.shuffle_files = args[5 .. 5 + shuffle_files_num];
+            return job;
+        }
+        return Error.UnknownType;
     }
 };
 
@@ -140,7 +149,7 @@ pub const ColumnData = union(enum) {
     I32: []const i32,
     Str: []const []const u8,
 
-    pub fn serialize(self: ColumnData, file: anytype) !void {
+    pub fn serialize(self: ColumnData, allocator: std.mem.Allocator, file: anytype) !void {
         var col_len: u32 = 0;
         switch (self) {
             .I32 => |vals| {
@@ -162,14 +171,24 @@ pub const ColumnData = union(enum) {
                 try file.writeAll(std.mem.sliceAsBytes(vals));
             },
             .Str => |vals| {
+                var total_size: usize = 0;
                 for (vals) |s| {
-                    const str_len: u8 = @intCast(s.len);
-                    try file.writeAll(std.mem.asBytes(&str_len));
+                    total_size += 1;
+                    total_size += s.len;
                 }
-                // TODO: We could write this all in one call, we know that all strings are contiguous
+
+                var buf = try allocator.alloc(u8, total_size);
+                defer allocator.free(buf);
+                var i: usize = 0;
                 for (vals) |s| {
-                    try file.writeAll(s);
+                    buf[i] = @intCast(s.len);
+                    i += 1;
                 }
+                for (vals) |s| {
+                    @memcpy(buf[i..][0..s.len], s);
+                    i += s.len;
+                }
+                try file.writeAll(buf);
             },
         }
     }
@@ -238,11 +257,11 @@ pub const ColumnData = union(enum) {
 pub const Block = struct {
     cols: []const ColumnData,
 
-    pub fn serialize(self: Block, file: anytype) !void {
+    pub fn serialize(self: Block, allocator: std.mem.Allocator, file: anytype) !void {
         const row_count: u32 = @intCast(self.cols[0].len());
         try file.writeAll(std.mem.asBytes(&row_count));
         for (self.cols) |col| {
-            try col.serialize(file);
+            try col.serialize(allocator, file);
         }
         return;
     }
@@ -301,7 +320,7 @@ pub const BlockFile = struct {
         try ColumnSchema.serializeSchema(file, self.schema);
         const start: u32 = @intCast(try file.getPos());
         try self.block_starts.append(self.allocator, start);
-        try data.serialize(file);
+        try data.serialize(self.allocator, file);
         try self.writeFooter(file);
         return;
     }
@@ -411,3 +430,90 @@ pub fn filter_column(col: ColumnData, condition_col: []const bool, output_rows: 
         },
     }
 }
+
+pub fn fill_buckets(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    column: []const T,
+    bucket_sizes: [PARTITIONS]u32,
+    partition_per_row: []const u8,
+) ![PARTITIONS]std.ArrayList(T) {
+    var buckets: [PARTITIONS]std.ArrayList(T) = undefined;
+    for (0..PARTITIONS) |i| {
+        buckets[i] = try std.ArrayList(T).initCapacity(allocator, bucket_sizes[i]);
+    }
+    for (partition_per_row, 0..) |p, row| {
+        try buckets[p].append(allocator, column[row]);
+    }
+    return buckets;
+}
+
+pub const TaskResult = struct {
+    chunk: ?[]const ColumnData = null,
+    is_last: bool = false,
+};
+
+pub const OutputFile = struct {
+    file_path: []const u8,
+    partition_id: u8,
+};
+
+pub const LoadTableBlockProducer = struct {
+    allocator: std.mem.Allocator,
+    file_path: []const u8,
+    block_id: u32,
+    finished: bool = false,
+
+    pub fn init(allocator: std.mem.Allocator, file_path: []const u8, block_id: u32) !LoadTableBlockProducer {
+        return LoadTableBlockProducer{
+            .allocator = allocator,
+            .file_path = file_path,
+            .block_id = block_id,
+        };
+    }
+
+    pub fn next(self: *LoadTableBlockProducer) !TaskResult {
+        if (self.finished) {
+            return .{ .chunk = null, .is_last = true };
+        }
+        try GLOBAL_TRACER.startEvent("load table block");
+        const block_file = try BlockFile.initFromFile(self.allocator, self.file_path);
+        const block_data = try block_file.readBlock(self.block_id);
+        self.finished = true;
+        try GLOBAL_TRACER.endEvent("load table block");
+        return .{ .chunk = block_data, .is_last = true };
+    }
+};
+
+pub const LoadShuffleFilesProducer = struct {
+    allocator: std.mem.Allocator,
+    file_paths: [][]const u8,
+    current_file_index: usize = 0,
+    current_block_index: u32 = 0,
+
+    pub fn init(allocator: std.mem.Allocator, file_paths: [][]const u8) !LoadShuffleFilesProducer {
+        return LoadShuffleFilesProducer{
+            .allocator = allocator,
+            .file_paths = file_paths,
+        };
+    }
+
+    pub fn next(self: *LoadShuffleFilesProducer) !TaskResult {
+        if (self.current_file_index >= self.file_paths.len) {
+            return .{ .chunk = null, .is_last = true };
+        }
+        try GLOBAL_TRACER.startEvent("load shuffle block");
+        const file_path = self.file_paths[self.current_file_index];
+        const block_file = try BlockFile.initFromFile(self.allocator, file_path);
+        if (self.current_block_index >= block_file.block_starts.items.len) {
+            try GLOBAL_TRACER.endEvent("load shuffle block");
+            self.current_file_index += 1;
+            self.current_block_index = 0;
+            return self.next();
+        }
+        const block_data = try block_file.readBlock(self.current_block_index);
+        self.current_block_index += 1;
+        try GLOBAL_TRACER.endEvent("load shuffle block");
+        return .{ .chunk = block_data, .is_last = false };
+    }
+};

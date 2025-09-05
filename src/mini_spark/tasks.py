@@ -265,17 +265,13 @@ class AggregateCountTask(ConsumerTask):
 
     @trace("AggregateCountTask")
     def execute(self, chunk: Columns | None, *, is_last: bool) -> tuple[Columns | None, bool]:
-        if not is_last:
-            assert chunk is not None
-            assert self.parent_task.inferred_schema is not None
-            group_column = project_column(
-                self.group_by_column,
-                chunk,
-                self.parent_task.inferred_schema,
-            )
-            self.counter |= Counter(group_column)
-            return None, False
-        return (list(self.counter.keys()), list(self.counter.values())), True
+        if is_last and chunk is None:
+            return (list(self.counter.keys()), list(self.counter.values())), True
+        assert chunk is not None
+        assert self.parent_task.inferred_schema is not None
+        group_column = project_column(self.group_by_column, chunk, self.parent_task.inferred_schema)
+        self.counter |= Counter(group_column)
+        return None, False
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()

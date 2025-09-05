@@ -8,7 +8,6 @@ import threading
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
@@ -19,7 +18,7 @@ from rpyc import Connection, OneShotServer, Service
 from .codegen import compile_plan
 from .constants import WORKER_POOL_PROCESSES
 from .io import BlockFile
-from .jobs import Job, JobResult, JobResultTuple, OutputFile, ScanJob
+from .jobs import JobResult, JobResultTuple, OutputFile, RemoteJob
 from .plan import PhysicalPlan, Stage
 from .utils import (
     TRACER,
@@ -144,58 +143,31 @@ class DistributedExecutionEngine(AbstractContextManager["DistributedExecutionEng
 DistributedJobTuple = tuple[str, str, str, int, str]
 
 
-@dataclass
-class DistributedJob:
-    id: str
-    stage_id: str
-    input_file: Path
-    input_block_id: int
-    output_file: Path = Path()
-    executor_binary: Path = Path()
-
-    def to_tuple(self) -> DistributedJobTuple:
-        return (self.id, self.stage_id, str(self.input_file), self.input_block_id, str(self.output_file))
-
-    @staticmethod
-    def from_tuple(t: DistributedJobTuple) -> DistributedJob:
-        return DistributedJob(
-            id=t[0],
-            stage_id=t[1],
-            input_file=Path(t[2]),
-            input_block_id=t[3],
-            output_file=Path(t[4]),
-        )
-
-    @staticmethod
-    def from_normal_job(job: Job, current_stage: str) -> DistributedJob:
-        assert type(job) is ScanJob
-        return DistributedJob(
-            id=job.id,
-            stage_id=current_stage,
-            input_file=job.file_path.absolute(),
-            input_block_id=job.block_id,
-        )
-
-
-def execute_job(job: DistributedJob) -> JobResult:
-    print("executor: executing job", job)  # noqa: T201
+def execute_job(remote_job: RemoteJob) -> JobResult:
+    print("executor: executing job", remote_job)  # noqa: T201
     worker_id = multiprocessing.current_process().name
-    trace_file = (job.executor_binary.parent / f"trace-{job.id}").absolute()
+    executor_folder = remote_job.executor_binary.parent
+    trace_file = (executor_folder / f"trace-{remote_job.original_job.id}").absolute()
     TRACER.add_trace_file(trace_file, worker_id)
-    ret_code = subprocess.call(  # noqa: S603
+    written_files_bin = subprocess.check_output(  # noqa: S603
         [
-            str(job.executor_binary),
-            str(job.stage_id),
-            str(job.input_file.absolute()),
-            str(job.input_block_id),
-            str(job.output_file.absolute()),
+            str(remote_job.executor_binary),
+            str(remote_job.stage_id),
+            str(remote_job.output_file.absolute()),
             str(trace_file),
+            *remote_job.original_job.cmd_args(),
         ],
     )
-    assert ret_code == 0, f"executor: job {job.id} failed with code {ret_code}"
-    # TODO(david): we should parse which files the executor actually created
-    output_files = [OutputFile(executor_id="", file_path=job.output_file, partition=0)]
-    return JobResult(job_id=job.id, executor_id="", output_files=output_files)
+    written_files = written_files_bin.decode("utf-8").strip().split("\n")
+    print(written_files)  # noqa: T201
+    output_files = []
+    for written_file in written_files:
+        if not written_file.strip():
+            continue
+        file_path, partition = written_file.split()
+        partition_id = int(partition)
+        output_files.append(OutputFile(executor_id="", file_path=Path(file_path), partition=partition_id))
+    return JobResult(job_id=remote_job.original_job.id, executor_id="", output_files=output_files)
 
 
 class Executor(Service):  # type:ignore[misc]
@@ -226,10 +198,10 @@ class Executor(Service):  # type:ignore[misc]
         with executor_file.open("rb") as f:
             return f.read()
 
-    def exposed_execute_jobs(self, jobs: list[DistributedJobTuple]) -> list[JobResultTuple]:
-        parsed_jobs = [DistributedJob.from_tuple(job) for job in jobs]
+    def exposed_execute_jobs(self, jobs: list[str]) -> list[JobResultTuple]:
+        parsed_jobs = [RemoteJob.deserialize(job) for job in jobs]
         for job in parsed_jobs:
-            job.output_file = self.executor_path / f"stage_{job.stage_id}_block_{job.input_block_id}.bin"
+            job.output_file = self.executor_path / f"stage_{job.stage_id}_block_{job.original_job.id}.bin"
             job.executor_binary = self.executor_path / "executor_binary"
         job_results = self.worker_pool.map(execute_job, parsed_jobs)
         for result in job_results:
@@ -263,7 +235,7 @@ class Driver:
             conn.close()
 
     def execute_stage_on_nodes(self, stage: Stage) -> list[JobResult]:
-        jobs = [DistributedJob.from_normal_job(job, stage.stage_id).to_tuple() for job in stage.create_jobs()]
+        jobs = [RemoteJob(job, stage.stage_id).serialize() for job in stage.create_jobs()]
         async_calls = []
         for executor, job_chunk in zip(self.executors, chunk_list(jobs, len(self.executors)), strict=True):
             remote_execute = rpyc.async_(executor.exposed_execute_jobs)

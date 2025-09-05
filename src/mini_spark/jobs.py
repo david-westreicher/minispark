@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PosixPath  # noqa: F401 PosixPath is used in eval
+from typing import cast
 from uuid import uuid4
 
 OutputFileTuple = tuple[str, str, int]
@@ -14,6 +15,9 @@ class Job:
 
     def __post_init__(self) -> None:
         self.id = str(uuid4())
+
+    def cmd_args(self) -> list[str]:
+        raise NotImplementedError
 
 
 @dataclass
@@ -49,13 +53,34 @@ class ScanJob(Job):
     file_path: Path
     block_id: int
 
+    def cmd_args(self) -> list[str]:
+        return ["0", str(self.file_path.absolute()), str(self.block_id)]
+
 
 @dataclass(kw_only=True)
 class LoadShuffleFilesJob(Job):
     shuffle_files: list[OutputFile]
+
+    def cmd_args(self) -> list[str]:
+        return ["1", str(len(self.shuffle_files))] + [str(f.file_path.absolute()) for f in self.shuffle_files]
 
 
 @dataclass(kw_only=True)
 class JoinJob(Job):
     left_shuffle_files: list[OutputFile]
     right_shuffle_files: list[OutputFile]
+
+
+@dataclass
+class RemoteJob:
+    original_job: Job
+    stage_id: str
+    output_file: Path = Path()
+    executor_binary: Path = Path()
+
+    def serialize(self) -> str:
+        return repr(self)
+
+    @staticmethod
+    def deserialize(t: str) -> RemoteJob:
+        return cast("RemoteJob", eval(t))  # noqa: S307
