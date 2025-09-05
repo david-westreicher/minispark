@@ -131,18 +131,19 @@ DistributedJobTuple = tuple[str, str, str, int, str]
 def remote_execute_job(remote_job: RemoteJob) -> JobResult:
     worker_id = multiprocessing.current_process().name
     executor_folder = remote_job.executor_binary.parent
+    output_file = executor_folder / f"stage_{remote_job.stage_id}_{worker_id}.bin"
     trace_file = (executor_folder / f"trace-{remote_job.original_job.id}").absolute()
     TRACER.add_trace_file(trace_file, worker_id)
     written_files_bin = subprocess.check_output(  # noqa: S603
         [
             str(remote_job.executor_binary),
             str(remote_job.stage_id),
-            str(remote_job.output_file.absolute()),
+            str(output_file.absolute()),
             str(trace_file),
             *remote_job.original_job.cmd_args(),
         ],
     )
-    written_files = written_files_bin.decode("utf-8").strip().split("\n")
+    written_files = set(written_files_bin.decode("utf-8").strip().split("\n"))
     output_files = []
     for written_file in written_files:
         if not written_file.strip():
@@ -184,7 +185,6 @@ class Executor(Service):  # type:ignore[misc]
     def exposed_execute_jobs(self, jobs: list[str]) -> list[JobResultTuple]:
         parsed_jobs = [RemoteJob.deserialize(job) for job in jobs]
         for job in parsed_jobs:
-            job.output_file = self.executor_path / f"stage_{job.stage_id}_block_{job.original_job.id}.bin"
             job.executor_binary = self.executor_path / "executor_binary"
         job_results = self.worker_pool.map(remote_execute_job, parsed_jobs)
         for result in job_results:

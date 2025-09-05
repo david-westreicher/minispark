@@ -136,15 +136,29 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
                 //{%- for ref in consumer.group_column.references %}
                 const col_{{ref.name}} = column_data[{{ref.pos}}].{{ref.struct_type}};
                 //{%- endfor %}
-                for ({{consumer.group_column.column_names}}) |{{consumer.group_column.names}}| {
+                //{%- if consumer.in_sum_mode %}
+                const count_column = column_data[1].I32;
+                for ({{consumer.group_column.column_names}}, count_column) |{{consumer.group_column.names}}, prev_count| {
                     const key = {{consumer.group_column.zig_code}};
-                    const existing = self.counts.get(key);
-                    if (existing) |count| {
-                        try self.counts.put(key, count + 1);
+                    const pre:u32 = @intCast(prev_count);
+                    const existing = try self.counts.getOrPut(key);
+                    if (existing.found_existing) {
+                        existing.value_ptr.* += pre;
                     } else {
-                        try self.counts.put(key, 1);
+                        existing.value_ptr.* = pre;
                     }
                 }
+                //{%- else %}
+                for ({{consumer.group_column.column_names}}) |{{consumer.group_column.names}}| {
+                    const key = {{consumer.group_column.zig_code}};
+                    const existing = try self.counts.getOrPut(key);
+                    if (existing.found_existing) {
+                        existing.value_ptr.* += 1;
+                    } else {
+                        existing.value_ptr.* = 1;
+                    }
+                }
+                //{%- endif %}
                 try Executor.GLOBAL_TRACER.endEvent("{{consumer.class_name}}-agg");
                 return .{ .chunk = null, .is_last = input.is_last };
             }

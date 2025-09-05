@@ -55,7 +55,11 @@ class Stage:
         job_result = JobResult(job.id, "local", [])
         block_generator = iter(self.producer.generate_chunks(job))
         while True:
-            chunk, is_last = next(block_generator)
+            try:
+                chunk, is_last = next(block_generator)
+            except StopIteration:
+                chunk = None
+                is_last = True
             for consumer in self.consumers:
                 chunk, is_last = consumer.execute(chunk, is_last=is_last)
             written_files = self.writer.write(chunk, self.stage_id)
@@ -169,8 +173,13 @@ class PhysicalPlan:
             task.right_side_task = WriteToShufflePartitions(task.right_side_task, key_column=task.right_key)
             PhysicalPlan.expand_tasks(task.right_side_task)
         if type(task) is AggregateCountTask:
+            original_parent = task.parent_task
+            task.parent_task = AggregateCountTask(task.parent_task, group_by_column=task.group_by_column)
             task.parent_task = WriteToShufflePartitions(task.parent_task, key_column=task.group_by_column)
             task.parent_task = LoadShuffleFilesTask(task.parent_task)
+            task.in_sum_mode = True
+            PhysicalPlan.expand_tasks(original_parent)
+            return
         PhysicalPlan.expand_tasks(task.parent_task)
 
     @staticmethod

@@ -178,7 +178,14 @@ def test_physical_plan_expand_count(test_data_file: str):
 
     # assert
     task_types = [type(t) for t in task.task_chain]
-    assert task_types == [LoadTableBlockTask, WriteToShufflePartitions, LoadShuffleFilesTask, AggregateCountTask]
+    assert task_types == [
+        LoadTableBlockTask,
+        AggregateCountTask,
+        WriteToShufflePartitions,
+        LoadShuffleFilesTask,
+        AggregateCountTask,
+    ]
+    assert task.in_sum_mode
 
 
 def test_physical_plan_generate_join(test_data_file: str):
@@ -230,7 +237,7 @@ def test_physical_plan_generate_count(test_data_file: str):
     stage_0, stage_1 = stages
 
     assert type(stage_0.producer) is LoadTableBlockTask
-    assert [type(c) for c in stage_0.consumers] == []
+    assert [type(c) for c in stage_0.consumers] == [AggregateCountTask]
     assert type(stage_0.writer) is WriteToShufflePartitions
 
     assert type(stage_1.producer) is LoadShuffleFilesTask

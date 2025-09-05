@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
-from jinja2 import Environment
+from jinja2 import Environment, StrictUndefined
 
 from .constants import Schema
 from .plan import PhysicalPlan, Stage
@@ -101,6 +101,7 @@ class JinjaConsumer:
             self.object_name = f"{self.class_name}_obj"
             self.function_name = f"{self.object_name}.next"
             self.group_column = JinjaColumn(consumer.group_by_column, "", consumer.parent_task.inferred_schema)
+            self.in_sum_mode = consumer.in_sum_mode
 
     def get_projection_columns(self) -> Iterable[JinjaColumn]:
         yield from self.projection_columns
@@ -165,7 +166,10 @@ class JinjaPlan:
 @trace("compile stages")
 def compile_plan(physical_plan: PhysicalPlan) -> Path:
     template_str = resources.read_text("mini_spark.templates", "plan.zig")
-    template = Environment(block_start_string="//{%").from_string(template_str)  # noqa: S701
+    template = Environment(  # noqa: S701
+        block_start_string="//{%",
+        undefined=StrictUndefined,
+    ).from_string(template_str)
     final_code = template.render(plan=JinjaPlan(physical_plan))
     with STAGES_FILE.open("w", encoding="utf-8") as f:
         f.write(final_code)

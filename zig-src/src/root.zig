@@ -481,7 +481,7 @@ pub const LoadTableBlockProducer = struct {
         const block_data = try block_file.readBlock(self.block_id);
         self.finished = true;
         try GLOBAL_TRACER.endEvent("load table block");
-        return .{ .chunk = block_data, .is_last = true };
+        return .{ .chunk = block_data, .is_last = false };
     }
 };
 

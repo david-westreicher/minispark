@@ -13,6 +13,7 @@ from .constants import (
     SHUFFLE_PARTITIONS,
     Columns,
     ColumnType,
+    ColumnTypePython,
     Row,
     Schema,
 )
@@ -29,7 +30,7 @@ JoinType = Literal["inner", "left", "right", "outer"]
 
 
 @trace("project_col")
-def project_column(col: Col, chunk: Columns, schema: Schema) -> list[Any]:
+def project_column(col: Col, chunk: Columns, schema: Schema) -> list[ColumnTypePython]:
     col = col.schema_executor(schema)
     return [col.execute_row(row) for row in zip(*chunk, strict=True)]
 
@@ -115,7 +116,8 @@ class LoadTableBlockTask(ProducerTask):
     @trace_yield("LoadTableBlockTask")
     def generate_chunks(self, job: Job) -> Iterable[tuple[Columns | None, bool]]:
         assert type(job) is ScanJob
-        yield BlockFile(job.file_path).read_block_data_columns_by_id(job.block_id), True
+        yield BlockFile(job.file_path).read_block_data_columns_by_id(job.block_id), False
+        yield None, True
 
     @cached_property
     def file_schema(self) -> Schema:
@@ -262,6 +264,7 @@ class JoinTask(ProducerTask):
 class AggregateCountTask(ConsumerTask):
     group_by_column: Col
     counter: dict[Any, int] = field(default_factory=lambda: Counter())
+    in_sum_mode: bool = False
 
     @trace("AggregateCountTask")
     def execute(self, chunk: Columns | None, *, is_last: bool) -> tuple[Columns | None, bool]:
@@ -270,7 +273,12 @@ class AggregateCountTask(ConsumerTask):
         assert chunk is not None
         assert self.parent_task.inferred_schema is not None
         group_column = project_column(self.group_by_column, chunk, self.parent_task.inferred_schema)
-        self.counter |= Counter(group_column)
+        if self.in_sum_mode:
+            assert self.parent_task.inferred_schema[1] == ("count", ColumnType.INTEGER)
+            for key, count in zip(group_column, chunk[1], strict=True):
+                self.counter[key] += count
+        else:
+            self.counter |= Counter(group_column)
         return None, False
 
     def validate_schema(self) -> Schema:
