@@ -172,9 +172,9 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
     pub fn {{stage.writer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult, job: Job, schema: []const ColumnSchema, output_files: *std.ArrayList(OutputFile)) !void {
         const column_data = input.chunk orelse return;
         try Executor.GLOBAL_TRACER.startEvent("{{stage.writer.function_name}}");
-        var block_file = try Executor.BlockFile.init(allocator, schema);
         const block = Executor.Block{ .cols = column_data };
-        try block_file.writeData(job.output_file, block);
+        var block_file = try Executor.BlockFile.init(allocator, schema,job.output_file);
+        try block_file.appendData(allocator, block);
         try Executor.GLOBAL_TRACER.endEvent("{{stage.writer.function_name}}");
         const output_file_obj: OutputFile = .{ .file_path = job.output_file, .partition_id = 0 };
         try output_files.append(allocator, output_file_obj);
@@ -206,7 +206,6 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
         for (0..PARTITIONS) |i| {
             if (col_0_buckets[i].items.len == 0)
                 continue;
-            var block_file = try Executor.BlockFile.init(allocator, schema);
             const block = Executor.Block{
                 .cols = (&[_]ColumnData{
                     //{% for name, column in stage.writer.output_schema %}
@@ -217,7 +216,8 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
             var buffer: [128]u8 = undefined;
             try Executor.GLOBAL_TRACER.startEvent("write partition");
             const output_file = try std.fmt.bufPrint(&buffer, "{s}_{d}", .{ job.output_file, i });
-            try block_file.writeData(output_file, block);
+            var block_file = try Executor.BlockFile.init(allocator, schema, output_file);
+            try block_file.appendData(allocator, block);
             const output_file_obj: OutputFile = .{ .file_path = try allocator.dupe(u8, output_file), .partition_id = @intCast(i) };
             try output_files.append(allocator, output_file_obj);
             try Executor.GLOBAL_TRACER.endEvent("write partition");

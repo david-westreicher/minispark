@@ -1,5 +1,8 @@
 const std = @import("std");
 
+const SIZE_32KB = 32 * 1024;
+const ROWS_PER_BLOCK = 2 * 1024 * 1024;
+
 pub const TYPE_I32: u8 = 0;
 pub const TYPE_STR: u8 = 1;
 pub const Error = error{
@@ -13,18 +16,19 @@ pub const ColumnSchema = struct {
     typ: u8,
     name: []const u8,
 
-    pub fn serializeSchema(file: anytype, columns: []const ColumnSchema) !void {
+    pub fn serializeSchema(writer: *std.fs.File.Writer, columns: []const ColumnSchema) !void {
         if (columns.len > 255) return Error.SchemaTooLarge;
 
-        try file.writeAll(&[_]u8{@intCast(columns.len)});
+        try writer.interface.writeAll(&[_]u8{@intCast(columns.len)});
 
         for (columns) |column| {
             if (column.name.len > 255) return Error.NameTooLong;
 
-            try file.writeAll(&[_]u8{column.typ});
-            try file.writeAll(&[_]u8{@intCast(column.name.len)});
-            try file.writeAll(column.name);
+            try writer.interface.writeAll(&[_]u8{column.typ});
+            try writer.interface.writeAll(&[_]u8{@intCast(column.name.len)});
+            try writer.interface.writeAll(column.name);
         }
+        try writer.end();
     }
 
     pub fn readSchema(allocator: std.mem.Allocator, reader: *std.fs.File.Reader) ![]ColumnSchema {
@@ -39,43 +43,34 @@ pub const ColumnSchema = struct {
         }
         return columns.items;
     }
-
-    pub fn format(
-        self: ColumnSchema,
-        writer: anytype,
-    ) !void {
-        try writer.print("Person(name=\"{s}\", type={d})", .{ self.name, self.typ });
-    }
 };
 
 pub const ColumnData = union(enum) {
     I32: []const i32,
     Str: []const []const u8,
 
-    pub fn serialize(self: ColumnData, allocator: std.mem.Allocator, file: anytype) !void {
-        var col_len: u32 = 0;
+    pub fn serialize(self: ColumnData, allocator: std.mem.Allocator, writer: *std.fs.File.Writer, offset: ?usize, end: ?usize) !void {
+        const start = offset orelse 0;
+        const fini = end orelse self.len();
         switch (self) {
             .I32 => |vals| {
-                col_len = @intCast(vals.len * 4);
+                const values = vals[start..fini];
+                const col_len: u32 = @intCast(values.len * 4);
+                try writer.interface.writeAll(std.mem.asBytes(&col_len));
+                try writer.interface.writeAll(std.mem.sliceAsBytes(values));
             },
             .Str => |vals| {
-                for (vals) |s| {
+                const values = vals[start..fini];
+                var col_len: u32 = 0;
+                for (values) |s| {
                     if (s.len > 255) {
                         return Error.StringTooLong;
                     }
                     col_len += @intCast(1 + s.len);
                 }
-            },
-        }
-        try file.writeAll(std.mem.asBytes(&col_len));
-
-        switch (self) {
-            .I32 => |vals| {
-                try file.writeAll(std.mem.sliceAsBytes(vals));
-            },
-            .Str => |vals| {
+                try writer.interface.writeAll(std.mem.asBytes(&col_len));
                 var total_size: usize = 0;
-                for (vals) |s| {
+                for (values) |s| {
                     total_size += 1;
                     total_size += s.len;
                 }
@@ -83,15 +78,15 @@ pub const ColumnData = union(enum) {
                 var buf = try allocator.alloc(u8, total_size);
                 defer allocator.free(buf);
                 var i: usize = 0;
-                for (vals) |s| {
+                for (values) |s| {
                     buf[i] = @intCast(s.len);
                     i += 1;
                 }
-                for (vals) |s| {
+                for (values) |s| {
                     @memcpy(buf[i..][0..s.len], s);
                     i += s.len;
                 }
-                try file.writeAll(buf);
+                try writer.interface.writeAll(buf);
             },
         }
     }
@@ -137,34 +132,23 @@ pub const ColumnData = union(enum) {
             },
         }
     }
-
-    pub fn format(
-        self: ColumnData,
-        writer: anytype,
-    ) !void {
-        switch (self) {
-            .I32 => |vals| {
-                try writer.print("I32 Column {any}", .{vals});
-            },
-            .Str => |vals| {
-                try writer.print("Str Column {{ ", .{});
-                for (vals) |val| {
-                    try writer.print("\"{s}\", ", .{val});
-                }
-                try writer.print("}}\n", .{});
-            },
-        }
-    }
 };
 
 pub const Block = struct {
     cols: []const ColumnData,
 
-    pub fn serialize(self: Block, allocator: std.mem.Allocator, file: anytype) !void {
+    pub fn serialize(self: Block, allocator: std.mem.Allocator, writer: *std.fs.File.Writer, block_starts: *std.ArrayList(u32)) !void {
+        var start: u32 = @intCast(writer.pos);
         const row_count: u32 = @intCast(self.cols[0].len());
-        try file.writeAll(std.mem.asBytes(&row_count));
-        for (self.cols) |col| {
-            try col.serialize(allocator, file);
+        try writer.interface.writeAll(std.mem.asBytes(&row_count));
+        var offset: usize = 0;
+        while (offset < self.cols[0].len()) : (offset += ROWS_PER_BLOCK) {
+            try block_starts.append(allocator, start);
+            for (self.cols) |col| {
+                const end = @min(offset + ROWS_PER_BLOCK, col.len());
+                try col.serialize(allocator, writer, offset, end);
+            }
+            start = @intCast(writer.pos);
         }
         return;
     }
@@ -179,6 +163,31 @@ pub const Block = struct {
         }
         return columns.items;
     }
+
+    pub fn merge(allocator: std.mem.Allocator, first_data: []const ColumnData, second_data: []const ColumnData) ![]const ColumnData {
+        std.debug.assert(first_data.len == second_data.len);
+        var merged = try std.ArrayList(ColumnData).initCapacity(allocator, first_data.len);
+        for (first_data, 0..) |col, i| {
+            const other_col = second_data[i];
+            switch (col) {
+                .I32 => |vals| {
+                    const other_vals = other_col.I32;
+                    const new_vals = try allocator.alloc(i32, vals.len + other_vals.len);
+                    @memcpy(new_vals[0..vals.len], vals);
+                    @memcpy(new_vals[vals.len..], other_vals);
+                    try merged.append(allocator, ColumnData{ .I32 = new_vals });
+                },
+                .Str => |vals| {
+                    const other_vals = other_col.Str;
+                    const new_vals = try allocator.alloc([]const u8, vals.len + other_vals.len);
+                    @memcpy(new_vals[0..vals.len], vals);
+                    @memcpy(new_vals[vals.len..], other_vals);
+                    try merged.append(allocator, ColumnData{ .Str = new_vals });
+                },
+            }
+        }
+        return merged.items;
+    }
 };
 
 pub const BlockFile = struct {
@@ -187,19 +196,19 @@ pub const BlockFile = struct {
     schema: []const ColumnSchema,
     block_starts: std.ArrayList(u32),
 
-    pub fn init(allocator: std.mem.Allocator, schema: []const ColumnSchema) !BlockFile {
+    pub fn init(allocator: std.mem.Allocator, schema: []const ColumnSchema, file_path: []const u8) !BlockFile {
         return BlockFile{
             .allocator = allocator,
             .schema = schema,
             .block_starts = try std.ArrayList(u32).initCapacity(allocator, 100),
-            .file_path = undefined,
+            .file_path = file_path,
         };
     }
 
     pub fn initFromFile(allocator: std.mem.Allocator, file_path: []const u8) !BlockFile {
         var file = try std.fs.cwd().openFile(file_path, .{ .mode = .read_only });
         defer file.close();
-        var file_buffer: [4096]u8 = undefined;
+        var file_buffer: [SIZE_32KB]u8 = undefined;
         var file_reader = file.reader(&file_buffer);
         const schema = try ColumnSchema.readSchema(allocator, &file_reader);
         const block_starts = try BlockFile.readBlockStarts(allocator, &file_reader);
@@ -212,29 +221,61 @@ pub const BlockFile = struct {
         };
     }
 
-    pub fn writeData(
-        self: *BlockFile,
-        file_path: []const u8,
-        data: Block,
-    ) !void {
-        const fs = std.fs.cwd();
-        var file = try fs.createFile(file_path, .{ .truncate = true });
+    pub fn writeData(self: *BlockFile, data: Block) !void {
+        var file = try std.fs.cwd().createFile(self.file_path, .{ .truncate = true });
         defer file.close();
-        try ColumnSchema.serializeSchema(file, self.schema);
-        const start: u32 = @intCast(try file.getPos());
-        try self.block_starts.append(self.allocator, start);
-        try data.serialize(self.allocator, file);
-        try self.writeFooter(file);
+        var write_buffer: [SIZE_32KB]u8 = undefined;
+        var writer = file.writer(&write_buffer);
+        try ColumnSchema.serializeSchema(&writer, self.schema);
+        try data.serialize(self.allocator, &writer, &self.block_starts);
+        try self.writeFooter(&writer);
+        try writer.end();
         return;
     }
 
-    pub fn writeFooter(self: *BlockFile, file: anytype) !void {
+    pub fn appendData(self: *BlockFile, allocator: std.mem.Allocator, block: Block) !void {
+        var file = std.fs.cwd().openFile(self.file_path, .{ .mode = .write_only }) catch |err| {
+            if (err == std.fs.File.OpenError.FileNotFound) {
+                try self.writeData(block);
+                return;
+            } else {
+                return err;
+            }
+        };
+        defer file.close();
+        var write_buffer: [SIZE_32KB]u8 = undefined;
+        var writer = file.writer(&write_buffer);
+
+        const read_block = try BlockFile.initFromFile(self.allocator, self.file_path);
+        const last_block_id: u32 = @intCast(read_block.block_starts.items.len - 1);
+        const last_block = try read_block.readBlock(last_block_id);
+        self.block_starts.clearAndFree(allocator);
+        try self.block_starts.appendSlice(allocator, read_block.block_starts.items);
+        var block_to_append = block;
+
+        if (last_block[0].len() < ROWS_PER_BLOCK) {
+            block_to_append = Block{
+                .cols = try Block.merge(allocator, last_block, block.cols),
+            };
+            const seek_pos: u64 = @intCast(self.block_starts.pop() orelse @panic("no block to pop"));
+            try writer.seekTo(seek_pos);
+        } else {
+            const seek_pos: u64 = try file.getEndPos() - 4 * (self.block_starts.items.len + 1);
+            try writer.seekTo(seek_pos); // right after last block
+        }
+        try block_to_append.serialize(allocator, &writer, &self.block_starts);
+        try self.writeFooter(&writer);
+        try writer.end();
+        return;
+    }
+
+    pub fn writeFooter(self: *BlockFile, writer: *std.fs.File.Writer) !void {
         for (self.block_starts.items) |off| {
-            try file.writeAll(std.mem.asBytes(&off));
+            try writer.interface.writeAll(std.mem.asBytes(&off));
         }
 
         const block_count: u32 = @intCast(self.block_starts.items.len);
-        try file.writeAll(std.mem.asBytes(&block_count));
+        try writer.interface.writeAll(std.mem.asBytes(&block_count));
         return;
     }
 
@@ -288,3 +329,53 @@ pub const BlockFile = struct {
         }
     }
 };
+
+test "write -> read block" {
+    var tmp = std.testing.tmpDir(.{}); // options: .{ .keep = true } if you want to inspect files
+    defer tmp.cleanup();
+    const allocator = std.heap.page_allocator;
+
+    const schema_arr = [_]ColumnSchema{
+        .{ .typ = TYPE_I32, .name = "delta" },
+        .{ .typ = TYPE_STR, .name = "msg" },
+    };
+    const col1 = ColumnData{ .I32 = &[_]i32{ -1, 2, 3 } };
+    const col2 = ColumnData{ .Str = &[_][]const u8{ "hello", "zig", "!" } };
+    const block_data = [_]ColumnData{ col1, col2 };
+    const block = Block{ .cols = &block_data };
+
+    var write_block_file = try BlockFile.init(allocator, &schema_arr, "tmp/test.bin");
+    try write_block_file.writeData(block);
+
+    var read_block_file = try BlockFile.initFromFile(allocator, "tmp/test.bin");
+    const read_block_data = try read_block_file.readBlock(0);
+
+    try std.testing.expectEqualDeep(block_data[0..], read_block_data);
+}
+
+test "write -> append -> read block" {
+    var tmp = std.testing.tmpDir(.{}); // options: .{ .keep = true } if you want to inspect files
+    defer tmp.cleanup();
+    const allocator = std.heap.page_allocator;
+
+    const schema_arr = [_]ColumnSchema{
+        .{ .typ = TYPE_I32, .name = "delta" },
+        .{ .typ = TYPE_STR, .name = "msg" },
+    };
+    const col1 = ColumnData{ .I32 = &[_]i32{ -1, 2, 3 } };
+    const col2 = ColumnData{ .Str = &[_][]const u8{ "hello", "zig", "!" } };
+    const block_data = [_]ColumnData{ col1, col2 };
+    const block = Block{ .cols = &block_data };
+
+    var write_block_file = try BlockFile.init(allocator, &schema_arr, "tmp/test2.bin");
+    try write_block_file.writeData(block);
+    try write_block_file.appendData(allocator, block);
+
+    var read_block_file = try BlockFile.initFromFile(allocator, "tmp/test2.bin");
+    const read_block_data = try read_block_file.readBlock(0);
+
+    const expected_col1 = ColumnData{ .I32 = &[_]i32{ -1, 2, 3, -1, 2, 3 } };
+    const expected_col2 = ColumnData{ .Str = &[_][]const u8{ "hello", "zig", "!", "hello", "zig", "!" } };
+    const expected_block_data = [_]ColumnData{ expected_col1, expected_col2 };
+    try std.testing.expectEqualDeep(expected_block_data[0..], read_block_data);
+}

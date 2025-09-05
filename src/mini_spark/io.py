@@ -191,8 +191,8 @@ class BlockFile:
             for data_block in _generate_data_blocks_for_columns(schema, columns_data):
                 block_starts.append(f.tell())
                 f.write(data_block)
-            for block_size in block_starts:
-                f.write(to_unsigned_int(block_size))
+            for block_start in block_starts:
+                f.write(to_unsigned_int(block_start))
             f.write(to_unsigned_int(len(block_starts)))
         return self
 
