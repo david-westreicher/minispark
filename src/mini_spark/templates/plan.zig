@@ -203,10 +203,7 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
             var buffer: [128]u8 = undefined;
             try Executor.GLOBAL_TRACER.startEvent("write partition");
             const output_file = try std.fmt.bufPrint(&buffer, "{s}_{d}", .{ job.output_file, i });
-            try Executor.GLOBAL_TRACER.startEvent("write partition real");
-            std.debug.print("cols {d}\n", .{block.cols.len});
             try block_file.writeData(output_file, block);
-            try Executor.GLOBAL_TRACER.endEvent("write partition real");
             const output_file_obj: OutputFile = .{ .file_path = try allocator.dupe(u8, output_file), .partition_id = @intCast(i) };
             try output_files.append(allocator, output_file_obj);
             try Executor.GLOBAL_TRACER.endEvent("write partition");

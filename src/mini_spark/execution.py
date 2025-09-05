@@ -39,6 +39,16 @@ class ExecutionEngine(ABC):
     @abstractmethod
     def execute_full_task(self, full_task: Task) -> list[JobResult]: ...
 
+    def generate_physical_plan(self, full_task: Task) -> PhysicalPlan:
+        print("###### Logical Plan")  # noqa: T201
+        full_task.explain()
+        print()  # noqa: T201
+        physical_plan = PhysicalPlan.generate_physical_plan(full_task)
+        print("##### Physical Plan")  # noqa: T201
+        physical_plan.explain()
+        print()  # noqa: T201
+        return physical_plan
+
     @abstractmethod
     def cleanup(self) -> None: ...
 
@@ -59,17 +69,9 @@ class PythonExecutionEngine(ExecutionEngine):
 
     @trace("execute full task")
     def execute_full_task(self, full_task: Task) -> list[JobResult]:
-        print("###### Logical Plan")  # noqa: T201
-        full_task.explain()
-        print()  # noqa: T201
-        physical_plan = PhysicalPlan.generate_physical_plan(full_task)
-        print("##### Physical Plan")  # noqa: T201
-        physical_plan.explain()
-        print()  # noqa: T201
-
+        physical_plan = self.generate_physical_plan(full_task)
         TRACER.start("Execution")
         for i, stage in enumerate(physical_plan.stages):
-            print("executing ", stage)  # noqa: T201
             TRACER.start(f"Stage {i}")
             for job in stage.create_jobs():
                 stage.execute(job)
@@ -80,16 +82,6 @@ class PythonExecutionEngine(ExecutionEngine):
             f.file_path for stage in physical_plan.stages for result in stage.job_results for f in result.output_files
         )
         return last_stage.job_results
-
-    @trace_yield("collect results")
-    def collect_results(self, results: list[JobResult], limit: int = math.inf) -> Iterable[Row]:  # type:ignore[assignment]
-        output_files = {file for result in results for file in result.output_files}
-        for file in output_files:
-            for row in BlockFile(file.file_path).read_data_rows():
-                yield row
-                limit -= 1
-                if limit <= 0:
-                    return
 
     @trace("remove files")
     def cleanup(self) -> None:
@@ -108,14 +100,7 @@ class DistributedExecutionEngine(AbstractContextManager["DistributedExecutionEng
         return self
 
     def execute_full_task(self, full_task: Task) -> list[JobResult]:
-        print("###### Logical Plan")  # noqa: T201
-        full_task.explain()
-        print()  # noqa: T201
-        physical_plan = PhysicalPlan.generate_physical_plan(full_task)
-        print("##### Physical Plan")  # noqa: T201
-        physical_plan.explain()
-        print()  # noqa: T201
-
+        physical_plan = self.generate_physical_plan(full_task)
         binary_output_file = compile_plan(physical_plan)
         self.driver.distribute_binary(binary_output_file)
         TRACER.start("Execution")
@@ -143,8 +128,7 @@ class DistributedExecutionEngine(AbstractContextManager["DistributedExecutionEng
 DistributedJobTuple = tuple[str, str, str, int, str]
 
 
-def execute_job(remote_job: RemoteJob) -> JobResult:
-    print("executor: executing job", remote_job)  # noqa: T201
+def remote_execute_job(remote_job: RemoteJob) -> JobResult:
     worker_id = multiprocessing.current_process().name
     executor_folder = remote_job.executor_binary.parent
     trace_file = (executor_folder / f"trace-{remote_job.original_job.id}").absolute()
@@ -159,7 +143,6 @@ def execute_job(remote_job: RemoteJob) -> JobResult:
         ],
     )
     written_files = written_files_bin.decode("utf-8").strip().split("\n")
-    print(written_files)  # noqa: T201
     output_files = []
     for written_file in written_files:
         if not written_file.strip():
@@ -203,7 +186,7 @@ class Executor(Service):  # type:ignore[misc]
         for job in parsed_jobs:
             job.output_file = self.executor_path / f"stage_{job.stage_id}_block_{job.original_job.id}.bin"
             job.executor_binary = self.executor_path / "executor_binary"
-        job_results = self.worker_pool.map(execute_job, parsed_jobs)
+        job_results = self.worker_pool.map(remote_execute_job, parsed_jobs)
         for result in job_results:
             result.executor_id = self.id
             result.output_files = [OutputFile(self.id, f.file_path, f.partition) for f in result.output_files]
@@ -235,11 +218,15 @@ class Driver:
             conn.close()
 
     def execute_stage_on_nodes(self, stage: Stage) -> list[JobResult]:
+        TRACER.start("Distribute jobs")
+        TRACER.start("Create Jobs")
         jobs = [RemoteJob(job, stage.stage_id).serialize() for job in stage.create_jobs()]
+        TRACER.end()
         async_calls = []
         for executor, job_chunk in zip(self.executors, chunk_list(jobs, len(self.executors)), strict=True):
             remote_execute = rpyc.async_(executor.exposed_execute_jobs)
             async_calls.append(remote_execute(job_chunk))
+        TRACER.end()
         results_waited_for: list[list[JobResultTuple]] = [async_call.value for async_call in async_calls]
         return [JobResult.from_tuple(result) for results in results_waited_for for result in results]
 
