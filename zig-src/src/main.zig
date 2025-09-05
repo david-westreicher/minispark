@@ -14,7 +14,7 @@ pub fn main() !void {
 
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
-    const job = try Job.fromArgs(&args);
+    const job = try Job.fromArgs(allocator, &args);
     const job_string = try std.fmt.allocPrint(allocator, "block_id_{d}", .{job.input_block_id});
     try Executor.GLOBAL_TRACER.startEvent(job_string);
 

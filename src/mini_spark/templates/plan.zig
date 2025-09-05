@@ -234,9 +234,9 @@ pub fn {{ stage.function_name }}(allocator: std.mem.Allocator, job: Job) !void {
     try Executor.GLOBAL_TRACER.startEvent("stage_{{stage.id}}");
 
     //{%- if stage.producer.is_load_table_block %}
-    var producer = try Executor.LoadTableBlockProducer.init(allocator, job.input_file, job.input_block_id);
+    var producer = try Executor.LoadTableBlockProducer.init(allocator, job.input_file orelse @panic("input file not set"), job.input_block_id);
     //{%- elif stage.producer.is_load_shuffles %}
-    var producer = try Executor.LoadShuffleFilesProducer.init(allocator, job.shuffle_files);
+    var producer = try Executor.LoadShuffleFilesProducer.init(allocator, job.shuffle_files orelse @panic("shuffle files not set"));
     //{%- endif %}
     //{%- for consumer in stage.consumers %}
         //{%- if consumer.is_count_aggregate %}

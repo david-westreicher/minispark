@@ -138,6 +138,7 @@ def remote_execute_job(remote_job: RemoteJob) -> JobResult:
         [
             str(remote_job.executor_binary),
             str(remote_job.stage_id),
+            worker_id,
             str(output_file.absolute()),
             str(trace_file),
             *remote_job.original_job.cmd_args(),

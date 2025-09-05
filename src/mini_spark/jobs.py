@@ -62,7 +62,8 @@ class LoadShuffleFilesJob(Job):
     shuffle_files: list[OutputFile]
 
     def cmd_args(self) -> list[str]:
-        return ["1", str(len(self.shuffle_files))] + [str(f.file_path.absolute()) for f in self.shuffle_files]
+        shuffle_files = set(self.shuffle_files)
+        return ["1", str(len(shuffle_files))] + [str(f.file_path.absolute()) for f in shuffle_files]
 
 
 @dataclass(kw_only=True)
