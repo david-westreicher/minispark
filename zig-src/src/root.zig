@@ -5,7 +5,9 @@ pub const TYPE_I32 = @import("block_file.zig").TYPE_I32;
 pub const BlockFile = @import("block_file.zig").BlockFile;
 pub const Block = @import("block_file.zig").Block;
 pub const ColumnData = @import("block_file.zig").ColumnData;
+pub const StringColumn = @import("block_file.zig").StringColumn;
 pub const ColumnSchema = @import("block_file.zig").ColumnSchema;
+pub const Schema = @import("block_file.zig").Schema;
 
 pub const PARTITIONS = 16;
 
@@ -131,38 +133,78 @@ pub fn filter_column(col: ColumnData, condition_col: []const bool, output_rows: 
             return ColumnData{ .I32 = filtered_vals };
         },
         .Str => |vals| {
+            var total_output_len: usize = 0;
+            for (vals.slices, condition_col) |string, c| {
+                if (c) {
+                    total_output_len += string.len;
+                }
+            }
+            var new_total = try allocator.alloc(u8, total_output_len);
             const filtered_vals = try allocator.alloc([]const u8, output_rows);
             var filter_index: u32 = 0;
-            for (vals, condition_col) |input_val, c| {
+            var offset: usize = 0;
+            for (vals.slices, condition_col) |string, c| {
                 if (c) {
-                    filtered_vals[filter_index] = input_val;
+                    filtered_vals[filter_index] = new_total[offset .. offset + string.len];
+                    offset += string.len;
                     filter_index += 1;
                 }
             }
-            return ColumnData{ .Str = filtered_vals };
+            return ColumnData{ .Str = StringColumn{
+                .total_buffer = new_total,
+                .slices = filtered_vals,
+            } };
         },
     }
 }
 
-pub fn fill_buckets(
-    comptime T: type,
+pub fn fill_buckets_I32(
     allocator: std.mem.Allocator,
-    column: []const T,
+    column: ColumnData,
     bucket_sizes: [PARTITIONS]u32,
     partition_per_row: []const u8,
-) ![PARTITIONS]std.ArrayList(T) {
-    var buckets: [PARTITIONS]std.ArrayList(T) = undefined;
-    for (0..PARTITIONS) |i| {
-        buckets[i] = try std.ArrayList(T).initCapacity(allocator, bucket_sizes[i]);
+) ![PARTITIONS]std.ArrayList(i32) {
+    switch (column) {
+        .I32 => |vals| {
+            var buckets: [PARTITIONS]std.ArrayList(i32) = undefined;
+            for (0..PARTITIONS) |i| {
+                buckets[i] = try std.ArrayList(i32).initCapacity(allocator, bucket_sizes[i]);
+            }
+            for (partition_per_row, vals) |p, val| {
+                try buckets[p].append(allocator, val);
+            }
+            return buckets;
+        },
+        .Str => |_| {
+            @panic("unexpected type");
+        },
     }
-    for (partition_per_row, 0..) |p, row| {
-        try buckets[p].append(allocator, column[row]);
+}
+pub fn fill_buckets_Str(
+    allocator: std.mem.Allocator,
+    column: ColumnData,
+    bucket_sizes: [PARTITIONS]u32,
+    partition_per_row: []const u8,
+) ![PARTITIONS]std.ArrayList([]const u8) {
+    switch (column) {
+        .I32 => |_| {
+            @panic("unexpected type");
+        },
+        .Str => |vals| {
+            var buckets: [PARTITIONS]std.ArrayList([]const u8) = undefined;
+            for (0..PARTITIONS) |i| {
+                buckets[i] = try std.ArrayList([]const u8).initCapacity(allocator, bucket_sizes[i]);
+            }
+            for (partition_per_row, vals.slices) |p, val| {
+                try buckets[p].append(allocator, val);
+            }
+            return buckets;
+        },
     }
-    return buckets;
 }
 
 pub const TaskResult = struct {
-    chunk: ?[]const ColumnData = null,
+    chunk: ?Block = null,
     is_last: bool = false,
 };
 

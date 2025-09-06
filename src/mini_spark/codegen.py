@@ -39,6 +39,12 @@ class JinjaColumnReference:
     type: str
     struct_type: str
 
+    @property
+    def reference_name(self) -> str:
+        if self.struct_type == "Str":
+            return f"col_{self.name}.slices"
+        return f"col_{self.name}"
+
 
 class JinjaColumn:
     def __init__(self, column: Col, function_name: str, input_schema: Schema, *, is_condition: bool = False) -> None:
@@ -53,7 +59,7 @@ class JinjaColumn:
             for col_pos, (col_name, col_type) in enumerate(input_schema)
             if col_name in referenced_columns
         ]
-        self.column_names = ",".join(f"col_{ref.name}" for ref in self.references)
+        self.column_names = ",".join(ref.reference_name for ref in self.references)
         self.names = ",".join(ref.name for ref in self.references)
         self.zig_code = column.zig_code_representation(input_schema)
 

@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import pytest
@@ -38,3 +39,21 @@ def test_groupby(test_data: str):
     rows.sort(key=sort_key)
     expected_rows.sort(key=sort_key)
     assert rows == expected_rows
+    time.sleep(1)
+
+
+def test_overflow(tmp_path: Path):
+    test_file = tmp_path / "fruits.bin"
+    test_data = [
+        {"num1": 2**31 - 1, "num2": 2**31 - 1},
+    ]
+    BlockFile(test_file).write_rows(test_data)
+    # act
+    with DistributedExecutionEngine() as engine:
+        rows = DataFrame(engine).table(str(test_file)).select(Col("num1") + Col("num2")).collect()
+
+    expected_rows = [
+        {"num1_add_num2": -2},
+    ]
+    assert rows == expected_rows
+    time.sleep(1)

@@ -2,6 +2,9 @@ const std = @import("std");
 const Executor = @import("executor");
 const ColumnData = @import("executor").ColumnData;
 const ColumnSchema = @import("executor").ColumnSchema;
+const Block = @import("executor").Block;
+const Schema = @import("executor").Schema;
+const StringColumn = @import("executor").StringColumn;
 const Job = @import("executor").Job;
 const Tracer = @import("executor").GLOBAL_TRACER;
 const OutputFile = @import("executor").OutputFile;
@@ -9,11 +12,11 @@ const PARTITIONS = Executor.PARTITIONS;
 
 // ###### Hash columns
 //{% for col in plan.hash_columns %}
-pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const ColumnData) ![]u8 {
-    const rows = input[0].len();
+pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block) ![]u8 {
+    const rows = block.rows();
     const partition_per_row = try allocator.alloc(u8, rows);
     //{%- for ref in col.references %}
-    const col_{{ref.name}} = input[{{ref.pos}}].{{ref.struct_type}};
+    const col_{{ref.name}} = block.cols[{{ref.pos}}].{{ref.struct_type}};
     //{%- endfor %}
     for ({{col.column_names}}, 0..) |{{col.names}}, _idx| {
         //{%- if col.struct_type == 'Str' %}
@@ -29,10 +32,10 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
 
 // ###### Condition columns
 //{% for col in plan.condition_columns %}
-pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const ColumnData, output: []bool) void {
+pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output: []bool) void {
     _ = allocator;
     //{%- for ref in col.references %}
-    const col_{{ref.name}} = input[{{ref.pos}}].{{ref.struct_type}};
+    const col_{{ref.name}} = block.cols[{{ref.pos}}].{{ref.struct_type}};
     //{%- endfor %}
     for ({{col.column_names}}, 0..) |{{col.names}}, _idx| {
         output[_idx] = {{col.zig_code}};
@@ -42,16 +45,22 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
 
 // ###### Projection columns
 //{% for col in plan.projection_columns %}
-pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const ColumnData, output: []{{col.zig_type}}) !ColumnData {
+pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output: []{{col.zig_type}}) !ColumnData {
+    //{%- if col.struct_type == 'I32' %}
     _ = allocator;
+    //{%- endif %}
     //{%- for ref in col.references %}
-    const col_{{ref.name}} = input[{{ref.pos}}].{{ref.struct_type}};
+    const col_{{ref.name}} = block.cols[{{ref.pos}}].{{ref.struct_type}};
     //{%- endfor %}
     for ({{col.column_names}}, 0..) |{{col.names}}, _idx| {
         output[_idx] = {{col.zig_code}};
     }
     const const_out = output;
+    //{%- if col.struct_type == 'Str' %}
+    return ColumnData{ .{{col.struct_type}} = try StringColumn.init(allocator, const_out) };
+    //{%- else %}
     return ColumnData{ .{{col.struct_type}} = const_out };
+    //{%- endif %}
 }
 //{%- endfor %}
 
@@ -63,40 +72,40 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
 
         //{%- if consumer.is_select %}
         pub fn {{consumer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult) !Executor.TaskResult {
-            const column_data = input.chunk orelse return .{ .is_last = input.is_last };
+            const block = input.chunk orelse return .{ .is_last = input.is_last };
             try Executor.GLOBAL_TRACER.startEvent("{{consumer.function_name}}");
-            const rows = column_data[0].len();
+            const rows = block.rows();
             const slice: []ColumnData = try allocator.alloc(ColumnData, {{consumer.input_columns}});
 
             //{%- for col in consumer.columns %}
             const col_{{ loop.index0 }} = try allocator.alloc({{col.zig_type}}, rows);
-            slice[{{ loop.index0 }}] = try {{col.function_name}}(allocator, column_data, col_{{ loop.index0}});
+            slice[{{ loop.index0 }}] = try {{col.function_name}}(allocator, block, col_{{ loop.index0}});
             //{%- endfor %}
 
             try Executor.GLOBAL_TRACER.endEvent("{{consumer.function_name}}");
-            return .{ .chunk = slice, .is_last = input.is_last };
+            return .{ .chunk = Block {.cols=slice}, .is_last = input.is_last };
         }
 
         //{%- endif %}
 
         //{%- if consumer.is_filter %}
         pub fn {{consumer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult) !Executor.TaskResult {
-            const column_data = input.chunk orelse return .{ .is_last = input.is_last };
+            const block = input.chunk orelse return .{ .is_last = input.is_last };
             try Executor.GLOBAL_TRACER.startEvent("{{consumer.condition.function_name}}");
-            const rows = column_data[0].len();
+            const rows = block.rows();
             const condition_col = try allocator.alloc(bool, rows);
-            {{consumer.condition.function_name}}(allocator, column_data, condition_col);
+            {{consumer.condition.function_name}}(allocator, block, condition_col);
             var output_rows: usize = 0;
             for (condition_col) |c| {
                 if (c) output_rows += 1;
             }
-            const slice: []ColumnData = try allocator.alloc(ColumnData, column_data.len);
-            for (column_data, 0..) |col, col_idx| {
+            const slice: []ColumnData = try allocator.alloc(ColumnData, block.cols.len);
+            for (block.cols, 0..) |col, col_idx| {
                 const filtered_column = try Executor.filter_column(col, condition_col, output_rows, allocator);
                 slice[col_idx] = filtered_column;
             }
             try Executor.GLOBAL_TRACER.endEvent("{{consumer.condition.function_name}}");
-            return .{ .chunk = slice, .is_last = input.is_last };
+            return .{ .chunk = Block{.cols=slice}, .is_last = input.is_last };
         }
         //{%- endif %}
 
@@ -126,18 +135,22 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
                         idx += 1;
                     }
                     const chunk: []ColumnData = try allocator.alloc(ColumnData, 2);
+                    //{%- if consumer.group_column.struct_type == 'Str' %}
+                    chunk[0] = ColumnData{ .{{consumer.group_column.struct_type}} = try StringColumn.init(allocator, column_key) };
+                    //{%- else %}
                     chunk[0] = ColumnData{ .{{consumer.group_column.struct_type}} = column_key };
+                    //{%- endif %}
                     chunk[1] = ColumnData{ .I32 = column_counts };
                     try Executor.GLOBAL_TRACER.endEvent("{{consumer.class_name}}-emit");
-                    return .{ .chunk = chunk, .is_last = true };
+                    return .{ .chunk = Block{.cols = chunk}, .is_last = true };
                 }
                 try Executor.GLOBAL_TRACER.startEvent("{{consumer.class_name}}-agg");
-                const column_data = input.chunk orelse return .{ .is_last = input.is_last };
+                const block = input.chunk orelse return .{ .is_last = input.is_last };
                 //{%- for ref in consumer.group_column.references %}
-                const col_{{ref.name}} = column_data[{{ref.pos}}].{{ref.struct_type}};
+                const col_{{ref.name}} = block.cols[{{ref.pos}}].{{ref.struct_type}};
                 //{%- endfor %}
                 //{%- if consumer.in_sum_mode %}
-                const count_column = column_data[1].I32;
+                const count_column = block.cols[1].I32;
                 for ({{consumer.group_column.column_names}}, count_column) |{{consumer.group_column.names}}, prev_count| {
                     const key = {{consumer.group_column.zig_code}};
                     const pre:u32 = @intCast(prev_count);
@@ -169,10 +182,9 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
 
     // ###### Writers
     //{%- if stage.writer.is_write_local_file %}
-    pub fn {{stage.writer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult, job: Job, schema: []const ColumnSchema, output_files: *std.ArrayList(OutputFile)) !void {
-        const column_data = input.chunk orelse return;
+    pub fn {{stage.writer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult, job: Job, schema: Schema, output_files: *std.ArrayList(OutputFile)) !void {
+        const block = input.chunk orelse return;
         try Executor.GLOBAL_TRACER.startEvent("{{stage.writer.function_name}}");
-        const block = Executor.Block{ .cols = column_data };
         var block_file = try Executor.BlockFile.init(allocator, schema,job.output_file);
         try block_file.appendData(allocator, block);
         try Executor.GLOBAL_TRACER.endEvent("{{stage.writer.function_name}}");
@@ -182,11 +194,11 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
     //{%- endif %}
 
     //{%- if stage.writer.is_write_shuffle %}
-    pub fn {{stage.writer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult, job: Job, schema: []const ColumnSchema, output_files: *std.ArrayList(OutputFile)) !void {
-        const column_data = input.chunk orelse return;
+    pub fn {{stage.writer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult, job: Job, schema: Schema, output_files: *std.ArrayList(OutputFile)) !void {
+        const block = input.chunk orelse return;
         try Executor.GLOBAL_TRACER.startEvent("{{stage.writer.function_name}}");
         try Executor.GLOBAL_TRACER.startEvent("parition_per_row");
-        const partition_per_row = try {{stage.writer.hash_column.function_name}}(allocator, column_data);
+        const partition_per_row = try {{stage.writer.hash_column.function_name}}(allocator, block);
         var bucket_sizes: [PARTITIONS]u32 = .{0} ** PARTITIONS;
         for (partition_per_row) |partition| {
             bucket_sizes[partition] += 1;
@@ -194,10 +206,9 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
         try Executor.GLOBAL_TRACER.endEvent("parition_per_row");
         //{% for name, column in stage.writer.output_schema %}
         try Executor.GLOBAL_TRACER.startEvent("fill_bucket {{name}}");
-        const col_{{loop.index0}}_buckets = try Executor.fill_buckets(
-            {{column.native_zig_type}},
+        const col_{{loop.index0}}_buckets = try Executor.fill_buckets_{{column.zig_type}}(
             allocator,
-            column_data[{{loop.index0}}].{{column.zig_type}},
+            block.cols[{{loop.index0}}],
             bucket_sizes,
             partition_per_row,);
         try Executor.GLOBAL_TRACER.endEvent("fill_bucket {{name}}");
@@ -206,18 +217,21 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, input: []const Column
         for (0..PARTITIONS) |i| {
             if (col_0_buckets[i].items.len == 0)
                 continue;
-            const block = Executor.Block{
-                .cols = (&[_]ColumnData{
-                    //{% for name, column in stage.writer.output_schema %}
-                    .{ .{{column.zig_type}} = col_{{loop.index0}}_buckets[i].items },
-                    //{%- endfor %}
-                }),
-            };
+            var column_data = ([_]ColumnData{
+                //{% for name, column in stage.writer.output_schema %}
+                //{%- if column.zig_type == 'Str' %}
+                .{ .Str = try StringColumn.init(allocator, col_{{loop.index0}}_buckets[i].items) },
+                //{%- else %}
+                .{ .{{column.zig_type}} = col_{{loop.index0}}_buckets[i].items },
+                //{%- endif %}
+                //{%- endfor %}
+            });
+            const output_block = Executor.Block{.cols = column_data[0..]};
             var buffer: [128]u8 = undefined;
             try Executor.GLOBAL_TRACER.startEvent("write partition");
             const output_file = try std.fmt.bufPrint(&buffer, "{s}_{d}", .{ job.output_file, i });
             var block_file = try Executor.BlockFile.init(allocator, schema, output_file);
-            try block_file.appendData(allocator, block);
+            try block_file.appendData(allocator, output_block);
             const output_file_obj: OutputFile = .{ .file_path = try allocator.dupe(u8, output_file), .partition_id = @intCast(i) };
             try output_files.append(allocator, output_file_obj);
             try Executor.GLOBAL_TRACER.endEvent("write partition");
@@ -243,11 +257,11 @@ pub fn {{ stage.function_name }}(allocator: std.mem.Allocator, job: Job) !void {
     var {{consumer.object_name}} = try {{consumer.class_name}}.init(allocator);
         //{%- endif %}
     //{%- endfor %}
-    const output_schema = (&[_]ColumnSchema{
+    const output_schema = Schema{.columns=(&[_]ColumnSchema{
         //{% for name, column in stage.writer.output_schema -%}
         .{ .typ = Executor.TYPE_{{column.zig_type.upper()}}, .name = "{{name}}" },
         //{% endfor -%}
-    })[0..];
+    })[0..]};
 
     var last_output: Executor.TaskResult = .{.chunk= undefined, .is_last=false};
     var output_files = try std.ArrayList(OutputFile).initCapacity(allocator, PARTITIONS);

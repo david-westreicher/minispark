@@ -291,7 +291,7 @@ class AggregateCountTask(ConsumerTask):
 
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} AggregateCount():{nice_schema(self.inferred_schema)}")  # noqa: T201
+        print(f"{indent} AggregateCount(ins_sum_mode:{self.in_sum_mode}):{nice_schema(self.inferred_schema)}")  # noqa: T201
         self.parent_task.explain(lvl + 1)
 
 
