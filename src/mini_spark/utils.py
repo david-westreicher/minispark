@@ -60,6 +60,7 @@ class TraceFile:
     timestamp: int
     trace_file: Path
     worker_id: str
+    parent_uuid_track: int
 
     def parse(self) -> Iterable[TraceEvent]:
         try:
@@ -82,6 +83,11 @@ class Tracer:
         self.trace_proto = TraceProtoBuilder()
         self.tracks: set[int] = set()
         self.define_custom_track(MAIN_SYSTEM_TRACK_UUID, "Main System")
+
+    def new_track(self, name: str, parent_track_uuid: int = MAIN_SYSTEM_TRACK_UUID) -> int:
+        track_uuid = hash(name) % 100000 + 1000
+        self.define_custom_track(track_uuid, name, parent_track_uuid)
+        return track_uuid
 
     def define_custom_track(self, track_uuid: int, name: str, parent_track_uuid: int | None = None) -> None:
         if track_uuid in self.tracks:
@@ -109,14 +115,13 @@ class Tracer:
         packet.track_event.track_uuid = MAIN_SYSTEM_TRACK_UUID if track_uuid == -1 else track_uuid
         packet.trusted_packet_sequence_id = TRUSTED_PACKET_SEQUENCE_ID
 
-    def add_trace_file(self, trace_file: Path, worker_id: str) -> None:
-        TRACE_FILES.put(TraceFile(time.time_ns(), trace_file, worker_id))
+    def add_trace_file(self, trace_file: Path, worker_id: str, parent_track_uuid: int) -> None:
+        TRACE_FILES.put(TraceFile(time.time_ns(), trace_file, worker_id, parent_track_uuid))
 
     def save(self, filename: str) -> None:
         try:
             while trace_file := TRACE_FILES.get(timeout=0.1):
-                track_uuid = hash(trace_file.worker_id) % 100000 + 1000
-                self.define_custom_track(track_uuid, f"Worker {trace_file.worker_id}")
+                track_uuid = self.new_track(f"Worker {trace_file.worker_id}", trace_file.parent_uuid_track)
                 for event in trace_file.parse():
                     event.set_packet(self.trace_proto.add_packet(), track_uuid)
         except Empty:

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from mini_spark.dataframe import DataFrame
+from mini_spark.execution import ExecutionEngine, LocalWorkerEngine, PythonExecutionEngine
 from mini_spark.io import BlockFile
 from mini_spark.sql import Col
 
@@ -21,9 +22,14 @@ def test_data(tmp_path: Path) -> str:
     return str(test_file)
 
 
-def test_table_load(test_data: str):
+ENGINES = [PythonExecutionEngine, LocalWorkerEngine]
+
+
+@pytest.mark.parametrize("engine_factory", ENGINES)
+def test_table_load(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
-    rows = DataFrame().table(test_data).collect()
+    with engine_factory() as engine:
+        rows = DataFrame(engine).table(test_data).collect()
 
     # assert
     assert rows == [
@@ -35,9 +41,11 @@ def test_table_load(test_data: str):
     ]
 
 
-def test_select(test_data: str):
+@pytest.mark.parametrize("engine_factory", ENGINES)
+def test_select(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
-    rows = DataFrame().table(test_data).select(Col("fruit")).collect()
+    with engine_factory() as engine:
+        rows = DataFrame(engine).table(test_data).select(Col("fruit")).collect()
 
     # assert
     assert rows == [
@@ -49,9 +57,11 @@ def test_select(test_data: str):
     ]
 
 
-def test_select_expression(test_data: str):
+@pytest.mark.parametrize("engine_factory", ENGINES)
+def test_select_expression(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
-    rows = DataFrame().table(test_data).select(Col("quantity") + 3).collect()
+    with engine_factory() as engine:
+        rows = DataFrame(engine).table(test_data).select(Col("quantity") + 3).collect()
 
     # assert
     assert rows == [
@@ -63,9 +73,11 @@ def test_select_expression(test_data: str):
     ]
 
 
-def test_select_alias(test_data: str):
+@pytest.mark.parametrize("engine_factory", ENGINES)
+def test_select_alias(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
-    rows = DataFrame().table(test_data).select(Col("fruit").alias("fruit_name")).collect()
+    with engine_factory() as engine:
+        rows = DataFrame(engine).table(test_data).select(Col("fruit").alias("fruit_name")).collect()
 
     # assert
     assert rows == [
@@ -77,9 +89,11 @@ def test_select_alias(test_data: str):
     ]
 
 
-def test_select_star(test_data: str):
+@pytest.mark.parametrize("engine_factory", ENGINES)
+def test_select_star(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
-    rows = DataFrame().table(test_data).select(Col("*")).collect()
+    with engine_factory() as engine:
+        rows = DataFrame(engine).table(test_data).select(Col("*")).collect()
 
     # assert
     assert rows == [
@@ -91,9 +105,11 @@ def test_select_star(test_data: str):
     ]
 
 
-def test_filter(test_data: str):
+@pytest.mark.parametrize("engine_factory", ENGINES)
+def test_filter(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
-    rows = DataFrame().table(test_data).filter(Col("quantity") > 3).collect()
+    with engine_factory() as engine:
+        rows = DataFrame(engine).table(test_data).filter(Col("quantity") > 3).collect()
 
     # assert
     assert rows == [
@@ -103,9 +119,11 @@ def test_filter(test_data: str):
     ]
 
 
-def test_groupby(test_data: str):
+@pytest.mark.parametrize("engine_factory", ENGINES)
+def test_groupby(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
-    rows = DataFrame().table(test_data).group_by(Col("fruit")).count().collect()
+    with engine_factory() as engine:
+        rows = DataFrame(engine).table(test_data).group_by(Col("fruit")).count().collect()
 
     # assert
     # TODO(david): implement assertDataFrameEquals
@@ -123,7 +141,7 @@ def test_groupby(test_data: str):
 def test_join(test_data: str):
     # act
     rows = (
-        DataFrame()
+        DataFrame(engine)
         .table(test_data)
         .select(Col("fruit").alias("fruit_left"), Col("color"))
         .join(

@@ -357,11 +357,16 @@ pub const BlockFile = struct {
             }
         };
         defer file.close();
-        var write_buffer: [SIZE_32KB]u8 = undefined;
-        var writer = file.writer(&write_buffer);
-
         var read_block = try BlockFile.initFromFile(self.allocator, self.file_path);
         defer read_block.deinit();
+
+        if (read_block.block_starts.items.len == 0) {
+            try self.writeData(block);
+            return;
+        }
+
+        var write_buffer: [SIZE_32KB]u8 = undefined;
+        var writer = file.writer(&write_buffer);
         const last_block_id: u32 = @intCast(read_block.block_starts.items.len - 1);
         var last_block = try read_block.readBlock(last_block_id);
         defer last_block.deinit(allocator);

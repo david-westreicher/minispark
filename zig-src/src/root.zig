@@ -74,48 +74,36 @@ pub var GLOBAL_TRACER: Tracer = undefined;
 
 pub const Job = struct {
     stage_id: u32 = 0,
-    worker_id: []const u8,
     output_file: []const u8,
-    trace_file: []const u8,
     input_file: ?[]const u8 = null,
     input_block_id: u32 = 0,
     shuffle_files: ?[][]const u8 = null,
 
-    pub fn fromArgs(allocator: std.mem.Allocator, it: *std.process.ArgIterator) !Job {
-        var args: [1024][]const u8 = undefined;
-        var idx: usize = 0;
-
-        while (it.next()) |arg| {
-            if (idx == 0) {
-                idx += 1;
-                continue;
-            }
-            args[idx - 1] = arg;
-            idx += 1;
+    pub fn fromFile(allocator: std.mem.Allocator, reader: *std.fs.File.Reader, output_path: []const u8) !?Job {
+        const stage: u8 = try reader.interface.takeInt(u8, .little);
+        if (stage == 255) {
+            return null;
         }
-
+        const job_type: u8 = try reader.interface.takeInt(u8, .little);
         var job = Job{
-            .stage_id = try std.fmt.parseInt(u32, args[0], 10),
-            .worker_id = try allocator.dupe(u8, args[1]),
-            .output_file = try allocator.dupe(u8, args[2]),
-            .trace_file = try allocator.dupe(u8, args[3]),
+            .stage_id = stage,
+            .output_file = try std.fmt.allocPrint(allocator, "{s}_result_{d}.bin", .{ output_path, stage }),
         };
-        const job_type = try std.fmt.parseInt(u32, args[4], 10);
         if (job_type == 0) {
-            job.input_file = try allocator.dupe(u8, args[5]);
-            job.input_block_id = try std.fmt.parseInt(u32, args[6], 10);
+            job.input_file = try reader.interface.readAlloc(allocator, try reader.interface.takeInt(u8, .little));
+            job.input_block_id = try reader.interface.takeInt(u32, .little);
             return job;
         }
         if (job_type == 1) {
-            const shuffle_files_num = try std.fmt.parseInt(u32, args[5], 10);
+            const shuffle_files_num = try reader.interface.takeInt(u32, .little);
             const shuffle_files = try allocator.alloc([]const u8, shuffle_files_num);
             for (0..shuffle_files_num) |i| {
-                shuffle_files[i] = try allocator.dupe(u8, args[6 + i]);
+                shuffle_files[i] = try reader.interface.readAlloc(allocator, try reader.interface.takeInt(u8, .little));
             }
             job.shuffle_files = shuffle_files;
             return job;
         }
-        return Error.UnknownType;
+        return null;
     }
 };
 
@@ -140,11 +128,12 @@ pub fn filter_column(col: ColumnData, condition_col: []const bool, output_rows: 
                 }
             }
             var new_total = try allocator.alloc(u8, total_output_len);
+            var offset: usize = 0;
             const filtered_vals = try allocator.alloc([]const u8, output_rows);
             var filter_index: u32 = 0;
-            var offset: usize = 0;
             for (vals.slices, condition_col) |string, c| {
                 if (c) {
+                    @memcpy(new_total[offset .. offset + string.len], string);
                     filtered_vals[filter_index] = new_total[offset .. offset + string.len];
                     offset += string.len;
                     filter_index += 1;

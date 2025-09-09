@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from mini_spark.dataframe import DataFrame
-from mini_spark.execution import DistributedExecutionEngine
+from mini_spark.execution import LocalWorkerEngine
 from mini_spark.io import BlockFile
 from mini_spark.sql import Col
 
@@ -23,9 +23,9 @@ def test_data(tmp_path: Path) -> str:
     return str(test_file)
 
 
-def test_groupby(test_data: str):
+def test_groupby(test_data: str, tmp_path: Path):
     # act
-    with DistributedExecutionEngine() as engine:
+    with LocalWorkerEngine(tmp_path / "local") as engine:
         rows = DataFrame(engine).table(test_data).group_by(Col("fruit")).count().collect()
 
     # assert
@@ -49,7 +49,7 @@ def test_overflow(tmp_path: Path):
     ]
     BlockFile(test_file).write_rows(test_data)
     # act
-    with DistributedExecutionEngine() as engine:
+    with LocalWorkerEngine(tmp_path / "local") as engine:
         rows = DataFrame(engine).table(str(test_file)).select(Col("num1") + Col("num2")).collect()
 
     expected_rows = [

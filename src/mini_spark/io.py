@@ -27,6 +27,11 @@ def read_unsigned_int(f: BinaryIO) -> int:
     return int.from_bytes(f.read(4), byteorder="little", signed=False)
 
 
+def encode_string(text: str) -> bytes:
+    assert len(text) < MAX_STR_LENGTH
+    return bytes([len(text) & 0xFF]) + text.encode("utf-8")
+
+
 def _serialize_schema(schema: Schema, f: BufferedWriter) -> None:
     # | schema-len |
     # ---- repeat 'schema-len' times ----

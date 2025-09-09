@@ -5,6 +5,8 @@ from pathlib import Path, PosixPath  # noqa: F401 PosixPath is used in eval
 from typing import cast
 from uuid import uuid4
 
+from .io import encode_string, to_unsigned_int
+
 OutputFileTuple = tuple[str, str, int]
 JobResultTuple = tuple[str, str, list[OutputFileTuple]]
 
@@ -17,6 +19,9 @@ class Job:
         self.id = str(uuid4())
 
     def cmd_args(self) -> list[str]:
+        raise NotImplementedError
+
+    def encode(self) -> bytes:
         raise NotImplementedError
 
 
@@ -36,7 +41,7 @@ class JobResult:
 
 @dataclass(frozen=True)
 class OutputFile:
-    executor_id: str
+    executor_id: str  # TODO(david): can be removed
     file_path: Path
     partition: int = 0
 
@@ -56,6 +61,10 @@ class ScanJob(Job):
     def cmd_args(self) -> list[str]:
         return ["0", str(self.file_path.absolute()), str(self.block_id)]
 
+    def encode(self) -> bytes:
+        job_type = 0
+        return bytes([job_type]) + encode_string(str(self.file_path.absolute())) + to_unsigned_int(self.block_id)
+
 
 @dataclass(kw_only=True)
 class LoadShuffleFilesJob(Job):
@@ -64,6 +73,15 @@ class LoadShuffleFilesJob(Job):
     def cmd_args(self) -> list[str]:
         shuffle_files = set(self.shuffle_files)
         return ["1", str(len(shuffle_files))] + [str(f.file_path.absolute()) for f in shuffle_files]
+
+    def encode(self) -> bytes:
+        shuffle_files = set(self.shuffle_files)
+        job_type = 1
+        return (
+            bytes([job_type])
+            + to_unsigned_int(len(shuffle_files))
+            + b"".join([encode_string(str(f.file_path.absolute())) for f in shuffle_files])
+        )
 
 
 @dataclass(kw_only=True)
