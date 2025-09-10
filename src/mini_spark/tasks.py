@@ -326,7 +326,7 @@ class WriteToShufflePartitions(WriterTask):
             shuffle_file.parent.mkdir(parents=True, exist_ok=True)
             data_in_rows = list(zip(*full_data, strict=True))
             BlockFile(shuffle_file, self.parent_task.inferred_schema).append_tuples(data_in_rows)
-            shuffle_files.append(OutputFile("local", shuffle_file, partition))
+            shuffle_files.append(OutputFile(shuffle_file, partition))
         return shuffle_files
 
     def validate_schema(self) -> Schema:
@@ -362,7 +362,7 @@ class WriteToLocalFileTask(WriterTask):
         output_file = Path(SHUFFLE_FOLDER / stage_id / "result.bin")
         output_file.parent.mkdir(parents=True, exist_ok=True)
         BlockFile(output_file, schema=self.parent_task.inferred_schema).append_data(chunk)
-        return [OutputFile("local", output_file)]
+        return [OutputFile(output_file)]
 
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")

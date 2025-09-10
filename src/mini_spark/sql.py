@@ -56,6 +56,7 @@ class Col:
     def __hash__(self) -> int:
         return hash((self.__class__, self.name))
 
+    # TODO(david): can be removed after refactoring join
     def execute(self, row: dict[str, ColumnTypePython]) -> ColumnTypePython:
         return row[self.name]
 

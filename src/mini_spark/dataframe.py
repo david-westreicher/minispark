@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
+from tabulate import tabulate
+
 from .execution import ExecutionEngine, PythonExecutionEngine
 from .tasks import (
     AggregateCountTask,
@@ -64,10 +66,5 @@ class DataFrame:
 
     def show(self, n: int = 10) -> None:
         results = self.engine.execute_full_task(self.task)
-        first = True
-        for row in self.engine.collect_results(results, limit=n):
-            if first:
-                print("|" + ("|".join(f"{col:<10}" for col in row)) + "|")  # noqa: T201
-                print("|" + ("+".join("-" * 10 for _ in row)) + "|")  # noqa: T201
-                first = False
-            print("|" + ("|".join(f"{v:<10}" for v in row.values())) + "|")  # noqa: T201
+        rows = list(self.engine.collect_results(results, limit=n))
+        print(tabulate(rows, tablefmt="rounded_outline", headers="keys"))  # noqa: T201

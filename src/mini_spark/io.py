@@ -44,8 +44,7 @@ def _serialize_schema(schema: Schema, f: BufferedWriter) -> None:
     for name, col_type in schema:
         assert len(name) < MAX_STR_LENGTH
         bytes_to_write.append(col_type.ordinal & 0xFF)
-        bytes_to_write.append(len(name) & 0xFF)
-        bytes_to_write.extend(name.encode("utf-8"))
+        bytes_to_write.extend(encode_string(name))
     f.write(bytes(bytes_to_write))
 
 

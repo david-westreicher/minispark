@@ -88,80 +88,42 @@ class PythonExecutionEngine(ExecutionEngine):
         self.shuffle_files_to_delete.clear()
 
 
-class Worker(threading.Thread):
-    def __init__(
+class ThreadEngine(ExecutionEngine):
+    def __init__(self, work_folder: Path = Path("executors") / "local") -> None:
+        self.work_folder = work_folder
+
+    @trace("execute full task")
+    def execute_full_task(self, full_task: Task) -> list[JobResult]:
+        physical_plan = self.generate_physical_plan(full_task)
+        binary_output_file = compile_plan(physical_plan)
+        TRACER.start("Execution")
+        self.worker_pool = ThreadWorkerPool(binary_output_file, WORKER_POOL_PROCESSES, self.work_folder)
+        self.work_folder.mkdir(parents=True, exist_ok=False)
+        for i, stage in enumerate(physical_plan.stages):
+            TRACER.start(f"Stage {i}")
+            job_results = self.worker_pool.execute_jobs_on_workers(int(stage.stage_id), list(stage.create_jobs()))
+            stage.job_results.extend(job_results)
+            TRACER.end()
+        TRACER.end()
+        last_stage = physical_plan.stages[-1]
+        self.worker_pool.stop()
+        return last_stage.job_results
+
+    def __exit__(
         self,
-        worker_id: str,
-        binary: Path,
-        job_queue: queue.Queue[tuple[int, Job]],
-        result_queue: queue.Queue[JobResult],
-        work_folder: Path,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
     ) -> None:
-        super().__init__(daemon=True)
-        self.worker_id = worker_id
-        self.job_queue = job_queue
-        self.result_queue = result_queue
-        trace_file = work_folder / f"{worker_id}_trace.pftrace"
-        self.proc = subprocess.Popen(  # noqa: S603
-            [
-                str(binary),
-                worker_id,
-                str(work_folder / worker_id),
-                str(trace_file),
-            ],
-            stdin=subprocess.PIPE,
-            stderr=sys.stdout,
-            stdout=subprocess.PIPE,
-            text=False,
-        )
-        self.track_uuid = TRACER.new_track(self.worker_id)
-        # sysargs: binary, worker_id, output_path, trace_file
-        # job: stage_id, job.cmd_args()
-        TRACER.add_trace_file(trace_file, worker_id, self.track_uuid)
-        self.start()
-
-    def run(self) -> None:
-        assert self.proc.stdin is not None
-        assert self.proc.stdout is not None
-        while True:
-            try:
-                stage_id, job = self.job_queue.get()
-                TRACER.start("job", self.track_uuid)
-                self.proc.stdin.write(bytes([stage_id]))
-                self.proc.stdin.write(job.encode())
-                self.proc.stdin.flush()
-                TRACER.start("await worker", self.track_uuid)
-                job_result = JobResult(job_id=job.id, executor_id=self.worker_id, output_files=[])
-                while True:
-                    result = self.proc.stdout.readline().decode().strip()
-                    result_path, partition = result.split()
-                    if result_path == "job_finished":
-                        break
-                    job_result.output_files.append(OutputFile("", Path(result_path), int(partition)))
-                TRACER.end(self.track_uuid)
-                self.result_queue.put(job_result)
-                self.job_queue.task_done()
-                TRACER.end(self.track_uuid)
-            except queue.ShutDown:
-                self.stop_process()
-                break
-
-    def stop_process(self) -> None:
-        assert self.proc.stdin is not None
-        assert self.proc.stdout is not None
-        self.proc.stdin.write(bytes([255]))
-        self.proc.stdin.flush()
-        self.proc.stdin.close()
-        ret = self.proc.wait()
-        assert ret == 0, f"Worker {self.worker_id} exited with code {ret}"
+        shutil.rmtree(self.work_folder, ignore_errors=True)
 
 
-class WorkerPool:
+class ThreadWorkerPool:
     def __init__(self, binary: Path, num_workers: int, work_folder: Path) -> None:
         self.job_queue: queue.Queue[tuple[int, Job]] = queue.Queue()
         self.result_queue: queue.Queue[JobResult] = queue.Queue()
         self.workers = [
-            Worker(
+            ThreadWorker(
                 str(worker_id),
                 binary,
                 self.job_queue,
@@ -183,36 +145,72 @@ class WorkerPool:
 
     @trace("stop workers")
     def stop(self) -> None:
-        self.job_queue.shutdown(immediate=False)
+        self.job_queue.shutdown()
         for worker in self.workers:
             worker.join()
 
 
-class LocalWorkerEngine(ExecutionEngine):
-    def __init__(self, work_folder: Path = Path("executors") / "local") -> None:
-        self.work_folder = work_folder
-
-    @trace("execute full task")
-    def execute_full_task(self, full_task: Task) -> list[JobResult]:
-        physical_plan = self.generate_physical_plan(full_task)
-        binary_output_file = compile_plan(physical_plan)
-        TRACER.start("Execution")
-        self.worker_pool = WorkerPool(binary_output_file, WORKER_POOL_PROCESSES, self.work_folder)
-        self.work_folder.mkdir(parents=True, exist_ok=False)
-        for i, stage in enumerate(physical_plan.stages):
-            TRACER.start(f"Stage {i}")
-            job_results = self.worker_pool.execute_jobs_on_workers(int(stage.stage_id), list(stage.create_jobs()))
-            stage.job_results.extend(job_results)
-            TRACER.end()
-        TRACER.end()
-        last_stage = physical_plan.stages[-1]
-        self.worker_pool.stop()
-        return last_stage.job_results
-
-    def __exit__(
+class ThreadWorker(threading.Thread):
+    def __init__(
         self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
+        worker_id: str,
+        binary: Path,
+        job_queue: queue.Queue[tuple[int, Job]],
+        result_queue: queue.Queue[JobResult],
+        work_folder: Path,
     ) -> None:
-        shutil.rmtree(self.work_folder, ignore_errors=True)
+        super().__init__(daemon=True)
+        self.worker_id = worker_id
+        self.job_queue = job_queue
+        self.result_queue = result_queue
+        trace_file = work_folder / f"{worker_id}_trace.pftrace"
+        self.process = subprocess.Popen(  # noqa: S603
+            [
+                str(binary),
+                worker_id,
+                str(work_folder / worker_id),
+                str(trace_file),
+            ],
+            stdin=subprocess.PIPE,
+            stderr=sys.stdout,
+            stdout=subprocess.PIPE,
+            text=False,
+        )
+        self.track_uuid = TRACER.new_track(self.worker_id)
+        TRACER.add_trace_file(trace_file, worker_id, self.track_uuid)
+        self.start()
+
+    def run(self) -> None:
+        assert self.process.stdin is not None
+        assert self.process.stdout is not None
+        while True:
+            try:
+                stage_id, job = self.job_queue.get()
+                TRACER.start("job", self.track_uuid)
+                self.process.stdin.write(bytes([stage_id]))
+                self.process.stdin.write(job.encode())
+                self.process.stdin.flush()
+                TRACER.start("await worker", self.track_uuid)
+                job_result = JobResult(job_id=job.id, executor_id=self.worker_id, output_files=[])
+                while True:
+                    result = self.process.stdout.readline().decode().strip()
+                    result_path, partition = result.split()
+                    if result_path == "job_finished":
+                        break
+                    job_result.output_files.append(OutputFile(Path(result_path), int(partition)))
+                TRACER.end(self.track_uuid)
+                self.result_queue.put(job_result)
+                self.job_queue.task_done()
+                TRACER.end(self.track_uuid)
+            except queue.ShutDown:
+                self.stop_process()
+                break
+
+    def stop_process(self) -> None:
+        assert self.process.stdin is not None
+        assert self.process.stdout is not None
+        self.process.stdin.write(bytes([255]))
+        self.process.stdin.flush()
+        self.process.stdin.close()
+        ret = self.process.wait()
+        assert ret == 0, f"Worker {self.worker_id} exited with code {ret}"

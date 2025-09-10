@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from mini_spark.dataframe import DataFrame
-from mini_spark.execution import ExecutionEngine, LocalWorkerEngine, PythonExecutionEngine
+from mini_spark.execution import ExecutionEngine, PythonExecutionEngine, ThreadEngine
 from mini_spark.io import BlockFile
 from mini_spark.sql import Col
 
@@ -22,7 +22,7 @@ def test_data(tmp_path: Path) -> str:
     return str(test_file)
 
 
-ENGINES = [PythonExecutionEngine, LocalWorkerEngine]
+ENGINES = [PythonExecutionEngine, ThreadEngine]
 
 
 @pytest.mark.parametrize("engine_factory", ENGINES)
@@ -141,7 +141,7 @@ def test_groupby(test_data: str, engine_factory: type[ExecutionEngine]):
 def test_join(test_data: str):
     # act
     rows = (
-        DataFrame(engine)
+        DataFrame()
         .table(test_data)
         .select(Col("fruit").alias("fruit_left"), Col("color"))
         .join(

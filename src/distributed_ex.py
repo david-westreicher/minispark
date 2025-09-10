@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from mini_spark.dataframe import DataFrame
-from mini_spark.execution import LocalWorkerEngine
+from mini_spark.execution import ThreadEngine
 from mini_spark.io import BlockFile
 from mini_spark.sql import Col
 from mini_spark.utils import TRACER
@@ -12,7 +12,7 @@ if not FRUIT_FILE.exists():
         [{"id": fruit, "count": i} for i in range(50_000_000) for fruit in ["apple", "banana"]]
     )
 
-with LocalWorkerEngine() as engine:
+with ThreadEngine() as engine:
     # without engine: 98 secs
     # with engine: 1 secs
     counts = (
