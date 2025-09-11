@@ -11,6 +11,7 @@ from .plan import PhysicalPlan, Stage
 from .sql import Col
 from .tasks import (
     AggregateCountTask,
+    AggregateTask,
     ConsumerTask,
     FilterTask,
     LoadShuffleFilesTask,
@@ -62,6 +63,7 @@ class JinjaColumn:
         self.column_names = ",".join(ref.reference_name for ref in self.references)
         self.names = ",".join(ref.name for ref in self.references)
         self.zig_code = column.zig_code_representation(input_schema)
+        self.real_column = column
 
 
 class JinjaProducer:
@@ -77,6 +79,7 @@ class JinjaConsumer:
         self.is_select = type(consumer) is ProjectTask
         self.is_filter = type(consumer) is FilterTask
         self.is_count_aggregate = type(consumer) is AggregateCountTask
+        self.is_aggregate = type(consumer) is AggregateTask
         self.projection_columns = []
         self.condition_columns = []
         assert consumer.parent_task.inferred_schema is not None
@@ -108,6 +111,34 @@ class JinjaConsumer:
             self.function_name = f"{self.object_name}.next"
             self.group_column = JinjaColumn(consumer.group_by_column, "", consumer.parent_task.inferred_schema)
             self.in_sum_mode = consumer.in_sum_mode
+        if self.is_aggregate:
+            assert type(consumer) is AggregateTask
+            self.class_name = function_name
+            self.object_name = f"{self.class_name}_obj"
+            self.entry_class_name = f"{self.class_name}_Entry"
+            self.function_name = f"{self.object_name}.next"
+            self.group_column = JinjaColumn(consumer.group_by_column, "", consumer.parent_task.inferred_schema)
+            self.agg_columns = [
+                JinjaColumn(
+                    column,
+                    f"{function_name}_project_{i}",
+                    consumer.parent_task.inferred_schema,
+                )
+                for i, column in enumerate(consumer.agg_columns)
+            ]
+            if consumer.before_shuffle:
+                self.projection_columns = [
+                    JinjaColumn(
+                        column.original_col,
+                        f"{function_name}_project_{i}",
+                        consumer.parent_task.inferred_schema,
+                    )
+                    for i, column in enumerate(consumer.agg_columns)
+                ]
+            self.agg_column_names = ",".join(f"col_{i}" for i in range(len(consumer.agg_columns)))
+            self.agg_column_var_names = ",".join(f"c{i}" for i in range(len(consumer.agg_columns)))
+
+            self.before_shuffle = consumer.before_shuffle
 
     def get_projection_columns(self) -> Iterable[JinjaColumn]:
         yield from self.projection_columns

@@ -10,6 +10,20 @@ const Tracer = @import("executor").GLOBAL_TRACER;
 const OutputFile = @import("executor").OutputFile;
 const PARTITIONS = Executor.PARTITIONS;
 
+// ###### Map Entries
+//{%- for stage in plan.stages %}
+    //{%- for consumer in stage.consumers -%}
+        //{%- if consumer.is_aggregate %}
+            pub const {{consumer.entry_class_name}} = struct {
+                key_0: []const u8, // Template for multiple group-by keys
+                //{%- for ref in consumer.agg_columns %}
+                agg_{{loop.index0}}: i32,
+                //{%- endfor %}
+            };
+        //{%- endif %}
+    //{%- endfor %}
+//{%- endfor %}
+
 // ###### Hash columns
 //{% for col in plan.hash_columns %}
 pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block) ![]u8 {
@@ -49,10 +63,13 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output:
     //{%- if col.struct_type == 'I32' %}
     _ = allocator;
     //{%- endif %}
+    //{%- if not col.column_names %}
+    _ = block;
+    //{%- endif %}
     //{%- for ref in col.references %}
     const col_{{ref.name}} = block.cols[{{ref.pos}}].{{ref.struct_type}};
     //{%- endfor %}
-    for ({{col.column_names}}, 0..) |{{col.names}}, _idx| {
+    for ({{col.column_names + ("," if col.column_names else "")}} 0..output.len) |{{col.names + ("," if col.column_names else "")}} _idx| {
         output[_idx] = {{col.zig_code}};
     }
     const const_out = output;
@@ -109,6 +126,101 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output:
         }
         //{%- endif %}
 
+        //{%- if consumer.is_aggregate %}
+        pub const {{consumer.class_name}} = struct {
+            allocator: std.mem.Allocator,
+            aggregator: std.StringHashMap({{consumer.entry_class_name}}),
+
+            pub fn init(allocator: std.mem.Allocator) !{{consumer.class_name}} {
+                return {{consumer.class_name}}{
+                    .allocator = allocator,
+                    .aggregator = std.StringHashMap({{consumer.entry_class_name}}).init(allocator),
+                };
+            }
+
+            pub fn next(self: *{{consumer.class_name}}, allocator: std.mem.Allocator, input: Executor.TaskResult) !Executor.TaskResult {
+                if (input.is_last and input.chunk == null) {
+                    const row_count = self.aggregator.count();
+                    try Executor.GLOBAL_TRACER.startEvent("{{consumer.class_name}}-emit");
+                    const column_key = try allocator.alloc([]const u8, row_count);
+                    //{%- for ref in consumer.agg_columns %}
+                    const column_{{loop.index0}} = try allocator.alloc(i32, row_count);
+                    //{%- endfor %}
+                    var it = self.aggregator.iterator();
+                    var idx: usize = 0;
+                    while (it.next()) |entry| {
+                        const agg_entry = entry.value_ptr.*;
+                        column_key[idx] = agg_entry.key_0;
+                        //{%- for ref in consumer.agg_columns %}
+                        column_{{loop.index0}}[idx] = agg_entry.agg_{{loop.index0}};
+                        //{%- endfor %}
+                        idx += 1;
+                    }
+                    const chunk: []ColumnData = try allocator.alloc(ColumnData, {{(consumer.agg_columns | length) + 1}});
+                    chunk[0] = ColumnData{ .Str = try StringColumn.init(allocator, column_key) };
+                    //{%- for ref in consumer.agg_columns %}
+                    chunk[{{loop.index0 + 1}}] = ColumnData{ .I32 = column_{{loop.index0}} };
+                    //{%- endfor %}
+                    try Executor.GLOBAL_TRACER.endEvent("{{consumer.class_name}}-emit");
+                    return .{ .chunk = Block{ .cols = chunk }, .is_last = true };
+                }
+                try Executor.GLOBAL_TRACER.startEvent("{{consumer.class_name}}-agg");
+                const block = input.chunk orelse return .{ .is_last = input.is_last };
+                //{%- if consumer.before_shuffle %}
+                const rows = block.rows();
+                //{%- endif %}
+                const col_key = block.cols[0].Str;
+                //{%- for ref in consumer.agg_columns %}
+                    //{%- if consumer.before_shuffle %}
+                const col_{{ loop.index0 }} = try allocator.alloc({{ref.zig_type}}, rows);
+                _ = try {{ref.function_name}}(allocator, block, col_{{ loop.index0}});
+                    //{%- else %}
+                const col_{{ loop.index0 }} = block.cols[{{ loop.index0 + 1}}].I32;
+                    //{%- endif %}
+                std.debug.print("col0{any} {{consumer.class_name}}\n", .{col_0});
+                //{%- endfor %}
+                for (col_key.slices, {{ consumer.agg_column_names }}) |key, {{ consumer.agg_column_var_names }}| {
+                    //{%- for col in consumer.agg_columns %}
+                        //{%- if col.real_column.type == 'count' %}
+                            _ = c{{loop.index0}};
+                        //{%- endif %}
+                    //{%- endfor %}
+                    const existing = try self.aggregator.getOrPut(key);
+                    if (existing.found_existing) {
+                        var entry = existing.value_ptr;
+                        //{%- for col in consumer.agg_columns %}
+                            //{%- if col.real_column.type == 'count' %}
+                        entry.agg_{{loop.index0}} += 1;
+                            //{%- endif %}
+                            //{%- if col.real_column.type == 'sum' %}
+                        entry.agg_{{loop.index0}} += c{{loop.index0}};
+                            //{%- endif %}
+                            //{%- if col.real_column.type == 'min' %}
+                        entry.agg_{{loop.index0}} = @min(c{{loop.index0}}, entry.agg_{{loop.index0}});
+                            //{%- endif %}
+                            //{%- if col.real_column.type == 'max' %}
+                        entry.agg_{{loop.index0}} = @max(c{{loop.index0}}, entry.agg_{{loop.index0}});
+                            //{%- endif %}
+                        //{%- endfor %}
+                    } else {
+                        existing.value_ptr.* = .{
+                            .key_0 = key,
+                            //{%- for col in consumer.agg_columns %}
+                                //{%- if col.real_column.type == 'count' %}
+                            .agg_{{loop.index0}} = 1,
+                                //{%- endif %}
+                                //{%- if col.real_column.type in ['min', 'max', 'sum'] %}
+                            .agg_{{loop.index0}} = c{{loop.index0}},
+                                //{%- endif %}
+                            //{%- endfor %}
+                        };
+                    }
+                }
+                try Executor.GLOBAL_TRACER.endEvent("{{consumer.class_name}}-agg");
+                return .{ .chunk = null, .is_last = input.is_last };
+            }
+        };
+        //{%- endif %}
 
         //{%- if consumer.is_count_aggregate %}
         pub const {{consumer.class_name}} = struct {
@@ -253,7 +365,7 @@ pub fn {{ stage.function_name }}(allocator: std.mem.Allocator, job: Job) !void {
     var producer = try Executor.LoadShuffleFilesProducer.init(allocator, job.shuffle_files orelse @panic("shuffle files not set"));
     //{%- endif %}
     //{%- for consumer in stage.consumers %}
-        //{%- if consumer.is_count_aggregate %}
+        //{%- if consumer.is_count_aggregate or consumer.is_aggregate %}
     var {{consumer.object_name}} = try {{consumer.class_name}}.init(allocator);
         //{%- endif %}
     //{%- endfor %}

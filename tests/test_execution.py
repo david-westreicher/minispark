@@ -139,7 +139,7 @@ def test_groupby_single_col_single_agg(test_data: str, engine_factory: type[Exec
     assert rows == expected_rows
 
 
-@pytest.mark.parametrize("engine_factory", [PythonExecutionEngine])
+@pytest.mark.parametrize("engine_factory", ENGINES)
 def test_groupby_single_col_multiple_agg(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
     with engine_factory() as engine:

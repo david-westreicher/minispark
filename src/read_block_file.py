@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from tabulate import tabulate
+
 from mini_spark.io import BlockFile
 
 if __name__ == "__main__":
@@ -22,6 +24,5 @@ if __name__ == "__main__":
             {"delta": 3, "msg": "!"},
         ],
     )
-
-    for row in BlockFile(args.file_path).read_data_rows():
-        print(row)  # noqa: T201
+    rows = BlockFile(args.file_path).read_data_rows()
+    print(tabulate(rows, tablefmt="rounded_outline", headers="keys"))  # noqa: T201

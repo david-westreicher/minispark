@@ -299,22 +299,19 @@ class Lit(Col):
         raise NotImplementedError(f"Zig code generation for literal {self.value} not implemented")
 
 
-AggregationType = Literal["count", "sum", "min", "max"]
+AggregationType = Literal["sum", "min", "max"]
 
 
 @dataclass
 class AggCol(Col):
-    original_col: Col | None
+    original_col: Col
     name: str
     type: AggregationType
 
-    def __init__(self, agg_type: AggregationType, original_col: Col | None = None) -> None:
+    def __init__(self, agg_type: AggregationType, original_col: Col) -> None:
         self.original_col = original_col
         self.type = agg_type
-        if original_col is None:
-            self.name = agg_type
-        else:
-            self.name = f"{agg_type}_{original_col.name}"
+        self.name = f"{agg_type}_{original_col.name}"
         super().__init__(self.name)
 
     def infer_type(self, schema: Schema) -> ColumnType:  # noqa: ARG002
@@ -352,4 +349,4 @@ class Functions:
 
     @staticmethod
     def count() -> AggCol:
-        return AggCol("count")
+        return AggCol("sum", Lit(1)).alias("count")

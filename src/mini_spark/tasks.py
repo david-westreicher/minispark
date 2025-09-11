@@ -318,25 +318,22 @@ class AggregateTask(ConsumerTask):
         if not self.per_column_aggregator:
             self.per_column_aggregator = [{} for _ in self.agg_columns]
 
-        group_column = project_column(self.group_by_column, chunk, self.parent_task.inferred_schema)
         if self.before_shuffle:
+            group_column = project_column(self.group_by_column, chunk, self.parent_task.inferred_schema)
             agg_expr_columns = tuple(
                 project_column(agg_col, chunk, self.parent_task.inferred_schema) for agg_col in self.agg_columns
             )
             self.fill_aggregators(group_column, agg_expr_columns)
         else:
             # after shuffle we don't need to project, just merge previous results
-            self.fill_aggregators(group_column, chunk[1:])
+            self.fill_aggregators(chunk[0], chunk[1:])
         return None, False
 
     def fill_aggregators(self, group_column: list[ColumnTypePython], agg_expr_columns: Columns) -> None:
         for counter, agg_col, agg_expr_col in zip(
             self.per_column_aggregator, self.agg_columns, agg_expr_columns, strict=True
         ):
-            if agg_col.type == "count" and self.before_shuffle:
-                for group in group_column:
-                    counter[group] = counter.get(group, 0) + 1
-            if agg_col.type == "sum" or (agg_col.type == "count" and not self.before_shuffle):
+            if agg_col.type == "sum":
                 for group, expr in zip(group_column, agg_expr_col, strict=True):
                     assert type(expr) is int
                     counter[group] = counter.get(group, 0) + expr
