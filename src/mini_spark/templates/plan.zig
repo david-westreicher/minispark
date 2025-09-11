@@ -15,7 +15,7 @@ const PARTITIONS = Executor.PARTITIONS;
     //{%- for consumer in stage.consumers -%}
         //{%- if consumer.is_aggregate %}
             pub const {{consumer.entry_class_name}} = struct {
-                key_0: []const u8, // Template for multiple group-by keys
+                key_0: []const u8,
                 //{%- for ref in consumer.agg_columns %}
                 agg_{{loop.index0}}: i32,
                 //{%- endfor %}
@@ -177,7 +177,6 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output:
                     //{%- else %}
                 const col_{{ loop.index0 }} = block.cols[{{ loop.index0 + 1}}].I32;
                     //{%- endif %}
-                std.debug.print("col0{any} {{consumer.class_name}}\n", .{col_0});
                 //{%- endfor %}
                 for (col_key.slices, {{ consumer.agg_column_names }}) |key, {{ consumer.agg_column_var_names }}| {
                     //{%- for col in consumer.agg_columns %}
