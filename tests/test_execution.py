@@ -6,6 +6,7 @@ from mini_spark.dataframe import DataFrame
 from mini_spark.execution import ExecutionEngine, PythonExecutionEngine, ThreadEngine
 from mini_spark.io import BlockFile
 from mini_spark.sql import Col
+from mini_spark.sql import Functions as F  # noqa: N817
 
 
 @pytest.fixture
@@ -120,7 +121,7 @@ def test_filter(test_data: str, engine_factory: type[ExecutionEngine]):
 
 
 @pytest.mark.parametrize("engine_factory", ENGINES)
-def test_groupby(test_data: str, engine_factory: type[ExecutionEngine]):
+def test_groupby_single_col_single_agg(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
     with engine_factory() as engine:
         rows = DataFrame(engine).table(test_data).group_by(Col("fruit")).count().collect()
@@ -131,6 +132,53 @@ def test_groupby(test_data: str, engine_factory: type[ExecutionEngine]):
         {"fruit": "apple", "count": 2},
         {"fruit": "banana", "count": 2},
         {"fruit": "orange", "count": 1},
+    ]
+    sort_key = lambda row: row["fruit"]  # noqa: E731
+    rows.sort(key=sort_key)
+    expected_rows.sort(key=sort_key)
+    assert rows == expected_rows
+
+
+@pytest.mark.parametrize("engine_factory", [PythonExecutionEngine])
+def test_groupby_single_col_multiple_agg(test_data: str, engine_factory: type[ExecutionEngine]):
+    # act
+    with engine_factory() as engine:
+        rows = (
+            DataFrame(engine)
+            .table(test_data)
+            .group_by(Col("fruit"))
+            .agg(
+                F.count(),
+                F.min(Col("quantity")).alias("min"),
+                F.max(Col("quantity")).alias("max"),
+                F.sum(Col("quantity")).alias("sum"),
+            )
+            .collect()
+        )
+
+    # assert
+    expected_rows = [
+        {
+            "fruit": "apple",
+            "count": 2,
+            "min": 3,
+            "max": 4,
+            "sum": 7,
+        },
+        {
+            "fruit": "banana",
+            "count": 2,
+            "min": 5,
+            "max": 7,
+            "sum": 12,
+        },
+        {
+            "fruit": "orange",
+            "count": 1,
+            "min": 2,
+            "max": 2,
+            "sum": 2,
+        },
     ]
     sort_key = lambda row: row["fruit"]  # noqa: E731
     rows.sort(key=sort_key)

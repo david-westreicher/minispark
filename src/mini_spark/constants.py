@@ -10,6 +10,9 @@ WORKER_POOL_PROCESSES = 4
 GLOBAL_TEMP_FOLDER = Path("tmp/")
 SHUFFLE_FOLDER = Path("shuffle/")
 
+MAX_INT = 2**31 - 1
+MIN_INT = -(2**31)
+
 
 class ColumnType(Enum):
     INTEGER = (0, int)

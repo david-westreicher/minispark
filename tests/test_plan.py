@@ -6,8 +6,10 @@ from mini_spark.constants import ColumnType
 from mini_spark.io import BlockFile
 from mini_spark.plan import PhysicalPlan
 from mini_spark.sql import Col, Lit
+from mini_spark.sql import Functions as F  # noqa: N817
 from mini_spark.tasks import (
     AggregateCountTask,
+    AggregateTask,
     FilterTask,
     JoinTask,
     LoadShuffleFilesTask,
@@ -186,6 +188,29 @@ def test_physical_plan_expand_count(test_data_file: str):
         AggregateCountTask,
     ]
     assert task.in_sum_mode
+
+
+def test_physical_plan_expand_agg(test_data_file: str):
+    # arrange
+    task = AggregateTask(
+        LoadTableBlockTask(VoidTask(), file_path=Path(test_data_file)),
+        group_by_column=Col("fruit"),
+        agg_columns=[F.min(Col("quantity"))],
+    )
+
+    # act
+    PhysicalPlan.expand_tasks(task)
+
+    # assert
+    task_types = [type(t) for t in task.task_chain]
+    assert task_types == [
+        LoadTableBlockTask,
+        AggregateTask,
+        WriteToShufflePartitions,
+        LoadShuffleFilesTask,
+        AggregateTask,
+    ]
+    assert not task.before_shuffle
 
 
 def test_physical_plan_generate_join(test_data_file: str):

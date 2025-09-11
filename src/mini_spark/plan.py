@@ -10,6 +10,7 @@ from .jobs import Job, JobResult, JoinJob, LoadShuffleFilesJob, OutputFile, Scan
 from .sql import BinaryOperatorColumn
 from .tasks import (
     AggregateCountTask,
+    AggregateTask,
     ConsumerTask,
     JoinTask,
     LoadShuffleFilesTask,
@@ -178,6 +179,16 @@ class PhysicalPlan:
             task.parent_task = WriteToShufflePartitions(task.parent_task, key_column=task.group_by_column)
             task.parent_task = LoadShuffleFilesTask(task.parent_task)
             task.in_sum_mode = True
+            PhysicalPlan.expand_tasks(original_parent)
+            return
+        if type(task) is AggregateTask:
+            original_parent = task.parent_task
+            task.parent_task = AggregateTask(
+                task.parent_task, group_by_column=task.group_by_column, agg_columns=task.agg_columns
+            )
+            task.parent_task = WriteToShufflePartitions(task.parent_task, key_column=task.group_by_column)
+            task.parent_task = LoadShuffleFilesTask(task.parent_task)
+            task.before_shuffle = False
             PhysicalPlan.expand_tasks(original_parent)
             return
         PhysicalPlan.expand_tasks(task.parent_task)

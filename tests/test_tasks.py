@@ -6,7 +6,9 @@ import pytest
 from mini_spark.constants import ColumnType
 from mini_spark.io import BlockFile
 from mini_spark.sql import Col, Lit
+from mini_spark.sql import Functions as F  # noqa: N817
 from mini_spark.tasks import (
+    AggregateTask,
     FilterTask,
     JoinTask,
     LoadShuffleFilesTask,
@@ -189,16 +191,68 @@ def test_schema_propagation_join_task():
     )
 
     # act
-    with patch.object(
-        BlockFile,
-        "file_schema",
-        property(lambda _: test_table_schema),
-    ):
+    with patch.object(BlockFile, "file_schema", property(lambda _: test_table_schema)):
         schema = task.validate_schema()
 
+    # assert
     assert schema == [
         ("left_id", ColumnType.STRING),
         ("b", ColumnType.INTEGER),
         ("right_id", ColumnType.STRING),
         ("c", ColumnType.INTEGER),
     ]
+
+
+def test_schema_propagation_aggregation():
+    # arrange
+    test_table_schema = [("fruit", ColumnType.STRING), ("quantity", ColumnType.INTEGER)]
+    task = AggregateTask(
+        LoadTableBlockTask(VoidTask(), file_path=Path()),
+        group_by_column=Col("fruit"),
+        agg_columns=[
+            F.count().alias("count_alias"),
+            F.count(),
+            F.min(Col("quantity")).alias("min"),
+            F.min(Col("quantity")),
+            F.max(Col("quantity")).alias("max"),
+            F.max(Col("quantity")),
+            F.sum(Col("quantity")).alias("sum"),
+            F.sum(Col("quantity")),
+        ],
+    )
+
+    # act
+    with patch.object(BlockFile, "file_schema", property(lambda _: test_table_schema)):
+        schema = task.validate_schema()
+
+    # assert
+    assert schema == [
+        ("fruit", ColumnType.STRING),
+        ("count_alias", ColumnType.INTEGER),
+        ("count", ColumnType.INTEGER),
+        ("min", ColumnType.INTEGER),
+        ("min_quantity", ColumnType.INTEGER),
+        ("max", ColumnType.INTEGER),
+        ("max_quantity", ColumnType.INTEGER),
+        ("sum", ColumnType.INTEGER),
+        ("sum_quantity", ColumnType.INTEGER),
+    ]
+
+
+def test_schema_propagation_aggregation_invalid_reference():
+    # arrange
+    test_table_schema = [("fruit", ColumnType.STRING), ("quantity", ColumnType.INTEGER)]
+    task = AggregateTask(
+        LoadTableBlockTask(VoidTask(), file_path=Path()),
+        group_by_column=Col("fruit"),
+        agg_columns=[
+            F.min(Col("invalid_reference")),
+        ],
+    )
+
+    # act / assert
+    with (
+        patch.object(BlockFile, "file_schema", property(lambda _: test_table_schema)),
+        pytest.raises(ValueError, match="Unknown columns in aggregation"),
+    ):
+        task.validate_schema()

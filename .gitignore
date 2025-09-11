@@ -8,3 +8,4 @@ zig-out
 zig-src/src/stage.zig
 check.sh
 executors/
+sql_history.txt

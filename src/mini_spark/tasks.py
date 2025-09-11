@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from .algorithms import external_merge_join, external_sort
 from .constants import (
+    MAX_INT,
+    MIN_INT,
     SHUFFLE_FOLDER,
     SHUFFLE_PARTITIONS,
     Columns,
@@ -19,7 +21,7 @@ from .constants import (
 )
 from .io import BlockFile
 from .jobs import Job, JoinJob, LoadShuffleFilesJob, OutputFile, ScanJob
-from .sql import BinaryOperatorColumn, Col
+from .sql import AggCol, BinaryOperatorColumn, Col
 from .utils import convert_rows_to_columns, create_temp_file, nice_schema, trace, trace_yield
 
 if TYPE_CHECKING:
@@ -291,7 +293,86 @@ class AggregateCountTask(ConsumerTask):
 
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} AggregateCount(ins_sum_mode:{self.in_sum_mode}):{nice_schema(self.inferred_schema)}")  # noqa: T201
+        print(f"{indent} AggregateCount(in_sum_mode:{self.in_sum_mode}):{nice_schema(self.inferred_schema)}")  # noqa: T201
+        self.parent_task.explain(lvl + 1)
+
+
+@dataclass(kw_only=True)
+class AggregateTask(ConsumerTask):
+    group_by_column: Col
+    agg_columns: list[AggCol]
+    per_column_aggregator: list[dict[Any, int]] = field(default_factory=list)
+    before_shuffle: bool = True
+
+    @trace("AggregateTask")
+    def execute(self, chunk: Columns | None, *, is_last: bool) -> tuple[Columns | None, bool]:
+        if is_last and chunk is None:
+            all_keys = list({key for col_aggregator in self.per_column_aggregator for key in col_aggregator})
+            columns = (
+                all_keys,
+                *[[col_aggregator.get(key, 0) for key in all_keys] for col_aggregator in self.per_column_aggregator],
+            )
+            return columns, True
+        assert chunk is not None
+        assert self.parent_task.inferred_schema is not None
+        if not self.per_column_aggregator:
+            self.per_column_aggregator = [{} for _ in self.agg_columns]
+
+        group_column = project_column(self.group_by_column, chunk, self.parent_task.inferred_schema)
+        if self.before_shuffle:
+            agg_expr_columns = tuple(
+                project_column(agg_col, chunk, self.parent_task.inferred_schema) for agg_col in self.agg_columns
+            )
+            self.fill_aggregators(group_column, agg_expr_columns)
+        else:
+            # after shuffle we don't need to project, just merge previous results
+            self.fill_aggregators(group_column, chunk[1:])
+        return None, False
+
+    def fill_aggregators(self, group_column: list[ColumnTypePython], agg_expr_columns: Columns) -> None:
+        for counter, agg_col, agg_expr_col in zip(
+            self.per_column_aggregator, self.agg_columns, agg_expr_columns, strict=True
+        ):
+            if agg_col.type == "count" and self.before_shuffle:
+                for group in group_column:
+                    counter[group] = counter.get(group, 0) + 1
+            if agg_col.type == "sum" or (agg_col.type == "count" and not self.before_shuffle):
+                for group, expr in zip(group_column, agg_expr_col, strict=True):
+                    assert type(expr) is int
+                    counter[group] = counter.get(group, 0) + expr
+            if agg_col.type == "min":
+                for group, expr in zip(group_column, agg_expr_col, strict=True):
+                    assert type(expr) is int
+                    counter[group] = min(counter.get(group, MAX_INT), expr)
+            if agg_col.type == "max":
+                for group, expr in zip(group_column, agg_expr_col, strict=True):
+                    assert type(expr) is int
+                    counter[group] = max(counter.get(group, MIN_INT), expr)
+
+    def validate_schema(self) -> Schema:
+        schema = self.parent_task.validate_schema()
+        if not self.before_shuffle:
+            # we already validated the schema before, after shuffle the schema should be the same
+            return schema
+        # TODO(david): check if agg_column type is compatible with inferred type (sum over strings not allowed)
+        referenced_column_names = {
+            col.name
+            for column in [*self.agg_columns, self.group_by_column]
+            for col in column.all_nested_columns
+            if type(col) is Col
+        }
+        schema_cols = {col_name for col_name, _ in schema}
+        unknown_cols = [col for col in referenced_column_names if col not in schema_cols]
+        if unknown_cols:
+            raise ValueError(f"Unknown columns in aggregation: {unknown_cols}")
+        return [
+            (self.group_by_column.name, self.group_by_column.infer_type(schema)),
+            *[(agg_col.name, agg_col.infer_type(schema)) for agg_col in self.agg_columns],
+        ]
+
+    def explain(self, lvl: int = 0) -> None:
+        indent = "  " * lvl + ("+- " if lvl > 0 else "")
+        print(f"{indent} AggregateTask(before_shuffle:{self.before_shuffle}):{nice_schema(self.inferred_schema)}")  # noqa: T201
         self.parent_task.explain(lvl + 1)
 
 

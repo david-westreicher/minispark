@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import operator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .constants import ColumnType, ColumnTypePython, Schema
 
@@ -297,3 +297,59 @@ class Lit(Col):
         if type(self.value) is str:
             return f'"{self.value}"'
         raise NotImplementedError(f"Zig code generation for literal {self.value} not implemented")
+
+
+AggregationType = Literal["count", "sum", "min", "max"]
+
+
+@dataclass
+class AggCol(Col):
+    original_col: Col | None
+    name: str
+    type: AggregationType
+
+    def __init__(self, agg_type: AggregationType, original_col: Col | None = None) -> None:
+        self.original_col = original_col
+        self.type = agg_type
+        if original_col is None:
+            self.name = agg_type
+        else:
+            self.name = f"{agg_type}_{original_col.name}"
+        super().__init__(self.name)
+
+    def infer_type(self, schema: Schema) -> ColumnType:  # noqa: ARG002
+        return ColumnType.INTEGER
+
+    def schema_executor(self, schema: Schema) -> Col:
+        return self.original_col.schema_executor(schema) if self.original_col else self
+
+    def execute_row(self, row: tuple[ColumnTypePython, ...]) -> ColumnTypePython:
+        return self.original_col.execute_row(row) if self.original_col else 0
+
+    def alias(self, name: str) -> AggCol:
+        self.name = name
+        return self
+
+    @property
+    def all_nested_columns(self) -> Iterable[Col]:
+        yield self
+        if self.original_col:
+            yield from self.original_col.all_nested_columns
+
+
+class Functions:
+    @staticmethod
+    def min(col: Col) -> AggCol:
+        return AggCol("min", col)
+
+    @staticmethod
+    def max(col: Col) -> AggCol:
+        return AggCol("max", col)
+
+    @staticmethod
+    def sum(col: Col) -> AggCol:
+        return AggCol("sum", col)
+
+    @staticmethod
+    def count() -> AggCol:
+        return AggCol("count")
