@@ -1,0 +1,190 @@
+from collections.abc import Callable
+
+import pytest
+
+from mini_spark.dataframe import DataFrame
+from mini_spark.parser import parse_sql
+from mini_spark.sql import BINOP_SYMBOLS, Col, Lit
+
+
+@pytest.fixture(autouse=True)
+def patch_eq(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    if request.node.get_closest_marker("no_patch_eq"):
+        return  # do nothing, skip patching
+    monkeypatch.setattr(Col, "__eq__", lambda a, b: repr(a) == repr(b))
+
+
+def test_select_all():
+    # arrange
+    sql = """
+        SELECT * FROM 'table';
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = DataFrame().table("table").select(Col("*"))
+    assert df.task == expected_df.task
+
+
+def test_select_columns():
+    # arrange
+    sql = """
+        SELECT col_1, col_2, col3 AS col_3, *, col_4 FROM 'table';
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .select(
+            Col("col_1"),
+            Col("col_2"),
+            Col("col3").alias("col_3"),
+            Col("*"),
+            Col("col_4"),
+        )
+    )
+    assert df.task == expected_df.task
+
+
+def test_select_simple_expression():
+    # arrange
+    sql = """
+        SELECT col_1 - 5 FROM 'table';
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = DataFrame().table("table").select(Col("col_1") - 5)
+    assert df.task == expected_df.task
+
+
+def test_select_complex_expression():
+    # arrange
+    sql = """
+        SELECT col_1 - 5 * col_2 / (col_3 + 2) FROM 'table';
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = DataFrame().table("table").select(Col("col_1") - Lit(5) * Col("col_2") / (Col("col_3") + 2))
+    assert df.task == expected_df.task
+
+
+def test_where_compare_col_value():
+    # arrange
+    sql = """
+        SELECT * FROM 'table' WHERE col_1 > 100;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = DataFrame().table("table").select(Col("*")).filter(Col("col_1") > Lit(100))
+    assert df.task == expected_df.task
+
+
+def test_where_compare_col_col():
+    # arrange
+    sql = """
+        SELECT * FROM 'table' WHERE col_1 > col_2;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = DataFrame().table("table").select(Col("*")).filter(Col("col_1") > Col("col_2"))
+    assert df.task == expected_df.task
+
+
+def test_where_compare_value_col():
+    # arrange
+    sql = """
+        SELECT * FROM 'table' WHERE 100 > col_2;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = DataFrame().table("table").select(Col("*")).filter(Lit(100) > Col("col_2"))
+    assert df.task == expected_df.task
+
+
+def test_where_complex_comparison():
+    # arrange
+    sql = """
+        SELECT * FROM 'table' WHERE (100 > col_2) AND ((col_2 < col_3) OR (col_4 != 20));
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .select(Col("*"))
+        .filter((Lit(100) > Col("col_2")) & ((Col("col_2") < Col("col_3")) | (Col("col_4") != Lit(20))))
+    )
+    assert df.task == expected_df.task
+
+
+def test_where_expression():
+    # arrange
+    sql = """
+        SELECT * FROM 'table' WHERE (col_2 * 10 > col_1 + 2);
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = DataFrame().table("table").select(Col("*")).filter(Col("col_2") * 10 > Col("col_1") + 2)
+    assert df.task == expected_df.task
+
+
+@pytest.mark.no_patch_eq
+# We need to disable the automatic patching of __eq__ for this test, because we want to test the actual equality op
+def test_where_compare_equality(monkeypatch: pytest.MonkeyPatch):
+    # arrange
+    sql = """
+        SELECT * FROM 'table' WHERE col_1 = col_2;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = DataFrame().table("table").select(Col("*")).filter(Col("col_1") == Col("col_2"))
+    monkeypatch.setattr(Col, "__eq__", lambda a, b: repr(a) == repr(b))
+    assert df.task == expected_df.task
+
+
+@pytest.mark.parametrize(
+    ("operator", "op_symbol"),
+    [(op, symbol) for op, symbol in BINOP_SYMBOLS.items() if symbol in {"<", "<=", ">=", ">", "!="}],
+)
+def test_where_compare_operators(operator: Callable[[Col, Col], Col], op_symbol: str):
+    # arrange
+    sql = f"""
+        SELECT * FROM 'table' WHERE col_1 {op_symbol} col_2;
+    """  # noqa: S608
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = DataFrame().table("table").select(Col("*")).filter(operator(Col("col_1"), Col("col_2")))
+    assert df.task == expected_df.task

@@ -8,6 +8,8 @@ version = "0.1.0"
 authors = [{ name = "David Westreicher" }]
 requires-python = ">=3.13"
 dependencies = [
+    "prompt_toolkit==3.0.52",
+    "parsimonious==0.10.0",
     "pytest==8.4.1",
     "pytest-timeout==2.4.0",
     "perfetto==0.14.0",
@@ -18,9 +20,10 @@ dependencies = [
 ]
 
 [tool.pytest.ini_options]
+markers = ["no_patch_eq"]
+
 pythonpath = ["src"]
 timeout = 10
-
 [tool.mypy]
 python_version = "3.13"
 files = ["src", "tests"]
@@ -39,6 +42,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "tabulate.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "parsimonious.*"
 ignore_missing_imports = true
 
 [tool.ruff]

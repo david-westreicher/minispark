@@ -38,6 +38,9 @@ class Col:
     def __or__(self, other: Col | ColumnTypePython) -> Col:
         return BinaryOperatorColumn(self, cast("Col", other), operator.or_)
 
+    def __invert__(self) -> Col:
+        raise NotImplementedError
+
     def __sub__(self, other: Col | ColumnTypePython) -> Col:
         return BinaryOperatorColumn(self, cast("Col", other), operator.sub)
 
@@ -52,6 +55,9 @@ class Col:
 
     def __eq__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
         return BinaryOperatorColumn(self, cast("Col", other), operator.eq)
+
+    def __ne__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
+        return BinaryOperatorColumn(self, cast("Col", other), operator.ne)
 
     def __hash__(self) -> int:
         return hash((self.__class__, self.name))
@@ -142,6 +148,9 @@ class AliasColumn(Col):
     def __str__(self) -> str:
         return f"({self.original_col}) AS {self.name}"
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
     def infer_type(self, schema: Schema) -> ColumnType:
         return self.original_col.infer_type(schema)
 
@@ -152,7 +161,7 @@ class AliasColumn(Col):
         return self.original_col.zig_code_representation(schema)
 
 
-OP_SYMBOLS = {
+BINOP_SYMBOLS: dict[Callable[[Col, Col], Col], str] = {
     operator.add: "+",
     operator.sub: "-",
     operator.mul: "*",
@@ -168,6 +177,9 @@ OP_SYMBOLS = {
     operator.ge: ">=",
     operator.and_: "and",
     operator.or_: "or",
+}
+UNOP_SYMBOLS: dict[Callable[[Col], Col], str] = {
+    operator.invert: "not",
 }
 
 
@@ -206,7 +218,7 @@ class BinaryOperatorColumn(Col):
         yield from self.right_side.all_nested_columns
 
     def __str__(self) -> str:
-        return f"{self.left_side} {OP_SYMBOLS[self.operator]} {self.right_side}"
+        return f"({self.left_side}) {BINOP_SYMBOLS[self.operator]} ({self.right_side})"
 
     def infer_type(self, schema: Schema) -> ColumnType:
         left_type = self.left_side.infer_type(schema)
@@ -242,14 +254,14 @@ class BinaryOperatorColumn(Col):
                 f" ({self.right_side.zig_code_representation(schema)}))"
             )
         return (
-            f"({self.left_side.zig_code_representation(schema)}) {OP_SYMBOLS[self.operator]}"
+            f"({self.left_side.zig_code_representation(schema)}) {BINOP_SYMBOLS[self.operator]}"
             f" ({self.right_side.zig_code_representation(schema)})"
         )
 
 
 @dataclass
 class Lit(Col):
-    value: Any
+    value: ColumnTypePython
 
     def __eq__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
         return super().__eq__(other)
