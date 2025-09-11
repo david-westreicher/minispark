@@ -9,7 +9,6 @@ from .io import BlockFile
 from .jobs import Job, JobResult, JoinJob, LoadShuffleFilesJob, OutputFile, ScanJob
 from .sql import BinaryOperatorColumn
 from .tasks import (
-    AggregateCountTask,
     AggregateTask,
     ConsumerTask,
     JoinTask,
@@ -173,14 +172,6 @@ class PhysicalPlan:
             task.parent_task = WriteToShufflePartitions(task.parent_task, key_column=task.left_key)
             task.right_side_task = WriteToShufflePartitions(task.right_side_task, key_column=task.right_key)
             PhysicalPlan.expand_tasks(task.right_side_task)
-        if type(task) is AggregateCountTask:
-            original_parent = task.parent_task
-            task.parent_task = AggregateCountTask(task.parent_task, group_by_column=task.group_by_column)
-            task.parent_task = WriteToShufflePartitions(task.parent_task, key_column=task.group_by_column)
-            task.parent_task = LoadShuffleFilesTask(task.parent_task)
-            task.in_sum_mode = True
-            PhysicalPlan.expand_tasks(original_parent)
-            return
         if type(task) is AggregateTask:
             original_parent = task.parent_task
             task.parent_task = AggregateTask(

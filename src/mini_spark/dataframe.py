@@ -7,7 +7,6 @@ from tabulate import tabulate
 
 from .execution import ExecutionEngine, PythonExecutionEngine
 from .tasks import (
-    AggregateCountTask,
     AggregateTask,
     FilterTask,
     JoinTask,
@@ -27,10 +26,6 @@ class GroupedData:
     def __init__(self, df: DataFrame, column: Col) -> None:
         self.df = df
         self.group_column = column
-
-    def count(self) -> DataFrame:
-        self.df.task = AggregateCountTask(self.df.task, group_by_column=self.group_column)
-        return self.df
 
     def agg(self, *agg_columns: AggCol) -> DataFrame:
         self.df.task = AggregateTask(self.df.task, group_by_column=self.group_column, agg_columns=list(agg_columns))

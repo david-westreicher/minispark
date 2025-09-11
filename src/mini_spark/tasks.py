@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections import Counter
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -14,7 +13,6 @@ from .constants import (
     SHUFFLE_FOLDER,
     SHUFFLE_PARTITIONS,
     Columns,
-    ColumnType,
     ColumnTypePython,
     Row,
     Schema,
@@ -260,41 +258,6 @@ class JoinTask(ProducerTask):
         )
         self.parent_task.explain(lvl + 1)
         self.right_side_task.explain(lvl + 1)
-
-
-@dataclass(kw_only=True)
-class AggregateCountTask(ConsumerTask):
-    group_by_column: Col
-    counter: dict[Any, int] = field(default_factory=lambda: Counter())
-    in_sum_mode: bool = False
-
-    @trace("AggregateCountTask")
-    def execute(self, chunk: Columns | None, *, is_last: bool) -> tuple[Columns | None, bool]:
-        if is_last and chunk is None:
-            return (list(self.counter.keys()), list(self.counter.values())), True
-        assert chunk is not None
-        assert self.parent_task.inferred_schema is not None
-        group_column = project_column(self.group_by_column, chunk, self.parent_task.inferred_schema)
-        if self.in_sum_mode:
-            assert self.parent_task.inferred_schema[1] == ("count", ColumnType.INTEGER)
-            for key, count in zip(group_column, chunk[1], strict=True):
-                self.counter[key] += count
-        else:
-            self.counter |= Counter(group_column)
-        return None, False
-
-    def validate_schema(self) -> Schema:
-        schema = self.parent_task.validate_schema()
-        assert self.group_by_column.name in {col_name for col_name, _ in schema}
-        return [
-            (self.group_by_column.name, self.group_by_column.infer_type(schema)),
-            ("count", ColumnType.INTEGER),
-        ]
-
-    def explain(self, lvl: int = 0) -> None:
-        indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} AggregateCount(in_sum_mode:{self.in_sum_mode}):{nice_schema(self.inferred_schema)}")  # noqa: T201
-        self.parent_task.explain(lvl + 1)
 
 
 @dataclass(kw_only=True)

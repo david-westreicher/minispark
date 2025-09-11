@@ -124,7 +124,7 @@ def test_filter(test_data: str, engine_factory: type[ExecutionEngine]):
 def test_groupby_single_col_single_agg(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
     with engine_factory() as engine:
-        rows = DataFrame(engine).table(test_data).group_by(Col("fruit")).count().collect()
+        rows = DataFrame(engine).table(test_data).group_by(Col("fruit")).agg(F.count()).collect()
 
     # assert
     # TODO(david): implement assertDataFrameEquals

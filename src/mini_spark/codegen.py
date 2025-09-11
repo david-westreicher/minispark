@@ -10,7 +10,6 @@ from .constants import Schema
 from .plan import PhysicalPlan, Stage
 from .sql import Col
 from .tasks import (
-    AggregateCountTask,
     AggregateTask,
     ConsumerTask,
     FilterTask,
@@ -78,7 +77,6 @@ class JinjaConsumer:
         self.function_name = function_name
         self.is_select = type(consumer) is ProjectTask
         self.is_filter = type(consumer) is FilterTask
-        self.is_count_aggregate = type(consumer) is AggregateCountTask
         self.is_aggregate = type(consumer) is AggregateTask
         self.projection_columns = []
         self.condition_columns = []
@@ -104,13 +102,6 @@ class JinjaConsumer:
                 is_condition=True,
             )
             self.condition_columns = [self.condition]
-        if self.is_count_aggregate:
-            assert type(consumer) is AggregateCountTask
-            self.class_name = function_name
-            self.object_name = f"{self.class_name}_obj"
-            self.function_name = f"{self.object_name}.next"
-            self.group_column = JinjaColumn(consumer.group_by_column, "", consumer.parent_task.inferred_schema)
-            self.in_sum_mode = consumer.in_sum_mode
         if self.is_aggregate:
             assert type(consumer) is AggregateTask
             self.class_name = function_name

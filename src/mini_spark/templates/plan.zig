@@ -222,74 +222,6 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output:
         };
         //{%- endif %}
 
-        //{%- if consumer.is_count_aggregate %}
-        pub const {{consumer.class_name}} = struct {
-            allocator: std.mem.Allocator,
-            counts: std.StringHashMap(u32),
-
-            pub fn init(allocator: std.mem.Allocator) !{{consumer.class_name}} {
-                return {{consumer.class_name}}{
-                    .allocator = allocator,
-                    .counts = std.StringHashMap(u32).init(allocator),
-                };
-            }
-
-            pub fn next(self: *{{consumer.class_name}}, allocator: std.mem.Allocator, input: Executor.TaskResult) !Executor.TaskResult {
-                if (input.is_last and input.chunk == null) {
-                    try Executor.GLOBAL_TRACER.startEvent("{{consumer.class_name}}-emit");
-                    const column_counts = try allocator.alloc(i32, self.counts.count());
-                    const column_key = try allocator.alloc({{consumer.group_column.zig_type}}, self.counts.count());
-                    var it = self.counts.iterator();
-                    var idx: usize = 0;
-                    while (it.next()) |entry| {
-                        column_key[idx] = entry.key_ptr.*;
-                        column_counts[idx] = @intCast(entry.value_ptr.*);
-                        idx += 1;
-                    }
-                    const chunk: []ColumnData = try allocator.alloc(ColumnData, 2);
-                    //{%- if consumer.group_column.struct_type == 'Str' %}
-                    chunk[0] = ColumnData{ .{{consumer.group_column.struct_type}} = try StringColumn.init(allocator, column_key) };
-                    //{%- else %}
-                    chunk[0] = ColumnData{ .{{consumer.group_column.struct_type}} = column_key };
-                    //{%- endif %}
-                    chunk[1] = ColumnData{ .I32 = column_counts };
-                    try Executor.GLOBAL_TRACER.endEvent("{{consumer.class_name}}-emit");
-                    return .{ .chunk = Block{.cols = chunk}, .is_last = true };
-                }
-                try Executor.GLOBAL_TRACER.startEvent("{{consumer.class_name}}-agg");
-                const block = input.chunk orelse return .{ .is_last = input.is_last };
-                //{%- for ref in consumer.group_column.references %}
-                const col_{{ref.name}} = block.cols[{{ref.pos}}].{{ref.struct_type}};
-                //{%- endfor %}
-                //{%- if consumer.in_sum_mode %}
-                const count_column = block.cols[1].I32;
-                for ({{consumer.group_column.column_names}}, count_column) |{{consumer.group_column.names}}, prev_count| {
-                    const key = {{consumer.group_column.zig_code}};
-                    const pre:u32 = @intCast(prev_count);
-                    const existing = try self.counts.getOrPut(key);
-                    if (existing.found_existing) {
-                        existing.value_ptr.* += pre;
-                    } else {
-                        existing.value_ptr.* = pre;
-                    }
-                }
-                //{%- else %}
-                for ({{consumer.group_column.column_names}}) |{{consumer.group_column.names}}| {
-                    const key = {{consumer.group_column.zig_code}};
-                    const existing = try self.counts.getOrPut(key);
-                    if (existing.found_existing) {
-                        existing.value_ptr.* += 1;
-                    } else {
-                        existing.value_ptr.* = 1;
-                    }
-                }
-                //{%- endif %}
-                try Executor.GLOBAL_TRACER.endEvent("{{consumer.class_name}}-agg");
-                return .{ .chunk = null, .is_last = input.is_last };
-            }
-        };
-        //{%- endif %}
-
     //{%- endfor %}
 
     // ###### Writers
@@ -365,7 +297,7 @@ pub fn {{ stage.function_name }}(allocator: std.mem.Allocator, job: Job) !void {
     var producer = try Executor.LoadShuffleFilesProducer.init(allocator, job.shuffle_files orelse @panic("shuffle files not set"));
     //{%- endif %}
     //{%- for consumer in stage.consumers %}
-        //{%- if consumer.is_count_aggregate or consumer.is_aggregate %}
+        //{%- if consumer.is_aggregate %}
     var {{consumer.object_name}} = try {{consumer.class_name}}.init(allocator);
         //{%- endif %}
     //{%- endfor %}
