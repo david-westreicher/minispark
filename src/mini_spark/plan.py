@@ -10,10 +10,10 @@ from .jobs import Job, JobResult, JoinJob, LoadShuffleFilesJob, OutputFile, Scan
 from .sql import BinaryOperatorColumn
 from .tasks import (
     AggregateTask,
+    BroadcastHashJoinTask,
     ConsumerTask,
     LoadShuffleFilesTask,
     LoadTableBlockTask,
-    OldJoinTask,
     ProducerTask,
     Task,
     VoidTask,
@@ -78,7 +78,7 @@ class Stage:
             shuffle_files = self.get_shuffle_files_of(self.dependencies[0])
             for shuffle_files_for_partition in shuffle_files.values():
                 yield LoadShuffleFilesJob(shuffle_files=list(shuffle_files_for_partition))
-        elif type(self.producer) is OldJoinTask:
+        elif type(self.producer) is BroadcastHashJoinTask:
             assert len(self.dependencies) == 2  # noqa: PLR2004
             left_stage, right_stage = self.dependencies
             left_shuffle_files = self.get_shuffle_files_of(left_stage)
@@ -119,7 +119,7 @@ def split_into_stages(root_task: Task, current_stage: Stage | None = None) -> It
         current_stage = Stage()
     curr_task = root_task
     while curr_task.parent_task is not None:
-        if type(curr_task) is OldJoinTask:
+        if type(curr_task) is BroadcastHashJoinTask:
             old_left, curr_task.parent_task = curr_task.parent_task, VoidTask()
             old_right, curr_task.right_side_task = (
                 curr_task.right_side_task,
@@ -156,7 +156,7 @@ class PhysicalPlan:
         if type(task) is VoidTask:
             return
         task.inferred_schema = task.validate_schema()
-        if type(task) is OldJoinTask:
+        if type(task) is BroadcastHashJoinTask:
             PhysicalPlan.infer_schema(task.right_side_task)
         PhysicalPlan.infer_schema(task.parent_task)
 
@@ -164,7 +164,7 @@ class PhysicalPlan:
     def expand_tasks(task: Task) -> None:
         if type(task) is VoidTask:
             return
-        if type(task) is OldJoinTask:
+        if type(task) is BroadcastHashJoinTask:
             # TODO(david): decompose join_condition: distribute the right keys to right shuffle task
             assert type(task.join_condition) is BinaryOperatorColumn
             task.left_key = task.join_condition.left_side
