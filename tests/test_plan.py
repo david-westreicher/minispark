@@ -9,8 +9,8 @@ from mini_spark.sql import Col, Lit
 from mini_spark.sql import Functions as F  # noqa: N817
 from mini_spark.tasks import (
     AggregateTask,
+    BroadcastHashJoinTask,
     FilterTask,
-    JoinTask,
     LoadShuffleFilesTask,
     LoadTableBlockTask,
     ProjectTask,
@@ -102,7 +102,7 @@ def test_physical_plan_infer_join(test_data_file: str):
         LoadTableBlockTask(VoidTask(), file_path=Path(test_data_file)),
         columns=[Col("fruit").alias("fruit_right"), Col("color")],
     )
-    task = JoinTask(
+    task = BroadcastHashJoinTask(
         left_task,
         right_side_task=right_task,
         join_condition=Col("fruit_left") == Col("fruit_right"),
@@ -131,7 +131,7 @@ def test_physical_plan_expand_join(test_data_file: str):
         LoadTableBlockTask(VoidTask(), file_path=Path(test_data_file)),
         columns=[Col("fruit").alias("fruit_right"), Col("color")],
     )
-    task = JoinTask(
+    task = BroadcastHashJoinTask(
         left_task,
         right_side_task=right_task,
         join_condition=Col("fruit_left") == Col("fruit_right"),
@@ -142,7 +142,7 @@ def test_physical_plan_expand_join(test_data_file: str):
     PhysicalPlan.expand_tasks(task)
 
     # assert
-    assert type(task) is JoinTask
+    assert type(task) is BroadcastHashJoinTask
     left_task_types = [type(t) for t in task.parent_task.task_chain]
     right_task_types = [type(t) for t in task.right_side_task.task_chain]
     assert left_task_types == right_task_types == [LoadTableBlockTask, ProjectTask, WriteToShufflePartitions]
@@ -185,7 +185,7 @@ def test_physical_plan_generate_join(test_data_file: str):
         LoadTableBlockTask(VoidTask(), file_path=Path(test_data_file)),
         columns=[Col("fruit").alias("fruit_right"), Col("color")],
     )
-    task = JoinTask(
+    task = BroadcastHashJoinTask(
         left_task,
         right_side_task=right_task,
         join_condition=Col("fruit_left") == Col("fruit_right"),
@@ -206,6 +206,6 @@ def test_physical_plan_generate_join(test_data_file: str):
     assert [type(c) for c in stage_1.consumers] == [ProjectTask]
     assert type(stage_1.writer) is WriteToShufflePartitions
 
-    assert type(stage_2.producer) is JoinTask
+    assert type(stage_2.producer) is BroadcastHashJoinTask
     assert [type(c) for c in stage_2.consumers] == []
     assert type(stage_2.writer) is WriteToLocalFileTask

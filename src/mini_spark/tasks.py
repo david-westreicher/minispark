@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from .algorithms import external_merge_join, external_sort
 from .constants import (
     MAX_INT,
     MIN_INT,
@@ -14,13 +14,12 @@ from .constants import (
     SHUFFLE_PARTITIONS,
     Columns,
     ColumnTypePython,
-    Row,
     Schema,
 )
 from .io import BlockFile
 from .jobs import Job, JoinJob, LoadShuffleFilesJob, OutputFile, ScanJob
 from .sql import AggCol, BinaryOperatorColumn, Col
-from .utils import convert_rows_to_columns, create_temp_file, nice_schema, trace, trace_yield
+from .utils import nice_schema, trace, trace_yield
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -189,67 +188,66 @@ class FilterTask(ConsumerTask):
 
 
 @dataclass(kw_only=True)
-class JoinTask(ProducerTask):
+class BroadcastHashJoinTask(ProducerTask):
     right_side_task: Task
     join_condition: Col
     how: JoinType = "inner"
     left_key: Col | None = None
     right_key: Col | None = None
+    left_schema: Schema | None = None
+    right_schema: Schema | None = None
+    left_row_map: dict[Any, list[int]] = field(default_factory=lambda: defaultdict(list))
 
     @trace_yield("JoinTask")
-    def generate_chunks(self, job: Job) -> Iterable[tuple[Columns | None, bool]]:
+    def generate_chunks(self, job: Job) -> Iterable[tuple[Columns | None, bool]]:  # noqa: C901
         assert self.left_key
         assert self.right_key
-        assert type(job) is JoinJob
-        left_sorted_file = self.sort_shuffle_files(
-            [file.file_path for file in job.left_shuffle_files],
-            self.left_key,
-        )
-        right_sorted_file = self.sort_shuffle_files(
-            [file.file_path for file in job.right_shuffle_files],
-            self.right_key,
-        )
-        joined_rows: list[Row] = []
-        if left_sorted_file and right_sorted_file:
-            # TODO(david): does not hold for all join types
-            joined_rows = list(
-                external_merge_join(
-                    left_sorted_file,
-                    right_sorted_file,
-                    self.left_key.execute,
-                    self.right_key.execute,
-                    self.how,
-                ),
-            )
-        if left_sorted_file is not None:
-            left_sorted_file.unlink(missing_ok=True)
-        if right_sorted_file is not None:
-            right_sorted_file.unlink(missing_ok=True)
         assert self.inferred_schema
-        # TODO(david): should be chunked, not all data at once
-        yield convert_rows_to_columns(joined_rows, self.inferred_schema), True
+        assert self.left_schema
+        assert self.right_schema
+        assert type(job) is JoinJob
 
-    @trace("Sort shuffle file")
-    def sort_shuffle_files(self, shuffle_files: list[Path], key: Col) -> Path | None:
-        if not shuffle_files:
-            return None
-        shuffle_file = BlockFile(create_temp_file()).merge_files(shuffle_files).file
-        output_file = create_temp_file()
-        tmp_file = create_temp_file()
-        external_sort(shuffle_file, key.execute, output_file, tmp_file)
-        shuffle_file.unlink(missing_ok=True)
-        tmp_file.unlink(missing_ok=True)
-        return output_file
+        # build hashmap from left side
+        load_left = LoadShuffleFilesTask(VoidTask())
+        left_columns: Columns = tuple([] for _ in self.left_schema)
+        for chunk, is_last in load_left.generate_chunks(LoadShuffleFilesJob(shuffle_files=job.left_shuffle_files)):
+            if chunk is None or is_last:
+                continue
+            key_column = project_column(self.left_key, chunk, self.left_schema)
+            for key, row_idx in zip(key_column, range(len(key_column)), strict=True):
+                self.left_row_map[key].append(row_idx)
+            for i, col in enumerate(chunk):
+                left_columns[i].extend(col)
+
+        # generate joined chunks
+        load_right = LoadShuffleFilesTask(VoidTask())
+        for chunk, is_last in load_right.generate_chunks(LoadShuffleFilesJob(shuffle_files=job.right_shuffle_files)):
+            if chunk is None or is_last:
+                yield None, True
+                return
+            output_columns: Columns = tuple([] for _ in self.inferred_schema)
+            key_column = project_column(self.right_key, chunk, self.right_schema)
+            for right_row_idx, key in enumerate(key_column):
+                left_rows_idx = self.left_row_map[key]
+                for left_row_idx in left_rows_idx:
+                    output_col_idx = 0
+                    for left_col in left_columns:
+                        output_columns[output_col_idx].append(left_col[left_row_idx])
+                        output_col_idx += 1
+                    for right_col in chunk:
+                        output_columns[output_col_idx].append(right_col[right_row_idx])
+                        output_col_idx += 1
+            yield output_columns, False
 
     def validate_schema(self) -> Schema:
-        left_schema = self.parent_task.validate_schema()
-        right_schema = self.right_side_task.validate_schema()
+        self.left_schema = self.parent_task.validate_schema()
+        self.right_schema = self.right_side_task.validate_schema()
         referenced_column_names = [col.name for col in self.join_condition.all_nested_columns if type(col) is Col]
-        schema_cols = {col_name for col_name, _ in left_schema + right_schema}
+        schema_cols = {col_name for col_name, _ in self.left_schema + self.right_schema}
         unknown_cols = [col for col in referenced_column_names if col not in schema_cols]
         if unknown_cols:
             raise ValueError(f"Unknown columns in Join: {unknown_cols}")
-        return left_schema + right_schema
+        return self.left_schema + self.right_schema
 
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")

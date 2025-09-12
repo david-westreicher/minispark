@@ -8,8 +8,8 @@ from tabulate import tabulate
 from .execution import ExecutionEngine, PythonExecutionEngine
 from .tasks import (
     AggregateTask,
+    BroadcastHashJoinTask,
     FilterTask,
-    JoinTask,
     JoinType,
     LoadTableBlockTask,
     ProjectTask,
@@ -57,7 +57,7 @@ class DataFrame:
         return GroupedData(self, column)
 
     def join(self, other_df: Self, on: Col, how: JoinType) -> DataFrame:
-        self.task = JoinTask(self.task, right_side_task=other_df.task, join_condition=on, how=how)
+        self.task = BroadcastHashJoinTask(self.task, right_side_task=other_df.task, join_condition=on, how=how)
         return self
 
     def collect(self) -> list[Row]:
