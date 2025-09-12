@@ -10,9 +10,9 @@ from mini_spark.sql import Functions as F  # noqa: N817
 from mini_spark.tasks import (
     AggregateTask,
     FilterTask,
-    JoinTask,
     LoadShuffleFilesTask,
     LoadTableBlockTask,
+    OldJoinTask,
     ProjectTask,
     VoidTask,
     WriteToShufflePartitions,
@@ -176,7 +176,7 @@ def test_schema_propagation_filter_task_fails():
 def test_schema_propagation_join_task():
     # arrange
     test_table_schema = [("left_id", ColumnType.STRING), ("b", ColumnType.INTEGER)]
-    task = JoinTask(
+    task = OldJoinTask(
         WriteToShufflePartitions(LoadTableBlockTask(VoidTask(), file_path=Path())),
         right_side_task=WriteToShufflePartitions(
             ProjectTask(

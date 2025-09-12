@@ -189,7 +189,7 @@ class FilterTask(ConsumerTask):
 
 
 @dataclass(kw_only=True)
-class JoinTask(ProducerTask):
+class OldJoinTask(ProducerTask):
     right_side_task: Task
     join_condition: Col
     how: JoinType = "inner"

@@ -9,9 +9,9 @@ from .execution import ExecutionEngine, PythonExecutionEngine
 from .tasks import (
     AggregateTask,
     FilterTask,
-    JoinTask,
     JoinType,
     LoadTableBlockTask,
+    OldJoinTask,
     ProjectTask,
     Task,
     VoidTask,
@@ -57,7 +57,7 @@ class DataFrame:
         return GroupedData(self, column)
 
     def join(self, other_df: Self, on: Col, how: JoinType) -> DataFrame:
-        self.task = JoinTask(self.task, right_side_task=other_df.task, join_condition=on, how=how)
+        self.task = OldJoinTask(self.task, right_side_task=other_df.task, join_condition=on, how=how)
         return self
 
     def collect(self) -> list[Row]:
