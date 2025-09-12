@@ -37,14 +37,7 @@ class ExecutionEngine(AbstractContextManager["ExecutionEngine"], ABC):
     def execute_full_task(self, full_task: Task) -> list[JobResult]: ...
 
     def generate_physical_plan(self, full_task: Task) -> PhysicalPlan:
-        print("###### Logical Plan")  # noqa: T201
-        full_task.explain()
-        print()  # noqa: T201
-        physical_plan = PhysicalPlan.generate_physical_plan(full_task)
-        print("##### Physical Plan")  # noqa: T201
-        physical_plan.explain()
-        print()  # noqa: T201
-        return physical_plan
+        return PhysicalPlan.generate_physical_plan(full_task)
 
     @trace_yield("collect results")
     def collect_results(self, results: list[JobResult], limit: int = math.inf) -> Iterable[Row]:  # type:ignore[assignment]

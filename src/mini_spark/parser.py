@@ -2,11 +2,13 @@ import operator
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from parsimonious.exceptions import VisitationError
 from parsimonious.grammar import Grammar
 from parsimonious.nodes import Node, NodeVisitor
 
 from mini_spark.constants import ColumnTypePython
-from mini_spark.sql import Col, Lit
+from mini_spark.sql import AggCol, Col, Lit
+from mini_spark.sql import Functions as F  # noqa: N817
 
 from .dataframe import DataFrame
 
@@ -18,7 +20,7 @@ sql_grammar = Grammar(
     select_list      = select_item (ws? "," ws? select_item)*
     select_item      = star / aggregate_function_call / expr_aliased
     expr_aliased     = expr alias?
-    aggregate_function_call = aggregate_function "(" column_name ")" alias?
+    aggregate_function_call = aggregate_function "(" expr? ")" alias?
     aggregate_function = "COUNT" / "SUM" / "AVG" / "MIN" / "MAX"
     alias            = ws "AS" ws identifier
 
@@ -86,6 +88,16 @@ ParenthisedConditionType = tuple[Any, Any, Col, Any, Any]
 AtomType = tuple[Col]
 
 
+class SemanticError(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class GroupByError(SemanticError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 class SQLVisitor(NodeVisitor):  # type:ignore[misc]
     def visit_table_name(self, node: Node, visited_children: list[Any]) -> DataFrame:  # noqa: ARG002
         _, table_name, _ = visited_children
@@ -93,6 +105,19 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
 
     def visit_query(self, node: Node, visited_children: QueryType) -> DataFrame:  # noqa: ARG002
         _, _, _, select_list, _, _, _, load_table, where_clause, group_by_clause, _, _, _ = visited_children
+        if type(group_by_clause) is list:
+            _, group_by_cols = group_by_clause[0]
+            group_by_col_names = {col.name for col in group_by_cols}
+            agg_cols = [col for col in select_list if type(col) is AggCol]
+            invalid_agg_cols = [
+                col for col in select_list if type(col) is not AggCol and col.name not in group_by_col_names
+            ]
+            if invalid_agg_cols:
+                raise GroupByError(
+                    "All selected columns must be aggregate functions or part of the key when using GROUP BY:\n"
+                    f"{invalid_agg_cols}"
+                )
+            return load_table.group_by(*group_by_cols).agg(*agg_cols).select(*[Col(col.name) for col in select_list])
         df = load_table.select(*select_list)
         if type(where_clause) is list:
             assert len(where_clause) == 1
@@ -114,6 +139,44 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
     def visit_select_item(self, node: Node, visited_children: SelectItemType) -> Col:  # noqa: ARG002
         assert len(visited_children) == 1
         return visited_children[0]
+
+    def visit_group_by_clause(self, node: Node, visited_children: list[Any]) -> list[Col]:  # noqa: ARG002
+        _, _, _, _, column, right = visited_children
+        columns = [column]
+        for right_expansion in right:
+            _, _, _, right_col = right_expansion
+            columns.append(right_col)
+        return columns
+
+    def visit_aggregate_function_call(self, node: Node, visited_children: list[Any]) -> AggCol:  # noqa: ARG002
+        aggregate_function, _, arguments, _, alias = visited_children
+        real_alias = None
+        if type(alias) is list:
+            assert len(alias) == 1
+            real_alias = alias[0]
+        agg_col = None
+        if aggregate_function == "COUNT":
+            assert type(arguments) is Node
+            agg_col = F.count()
+        if aggregate_function == "SUM":
+            assert type(arguments) is list
+            assert len(arguments) == 1
+            agg_col = F.sum(arguments[0])
+        if aggregate_function == "MIN":
+            assert type(arguments) is list
+            assert len(arguments) == 1
+            agg_col = F.min(arguments[0])
+        if aggregate_function == "MAX":
+            assert type(arguments) is list
+            assert len(arguments) == 1
+            agg_col = F.max(arguments[0])
+        assert agg_col is not None
+        if real_alias:
+            return agg_col.alias(real_alias)
+        return agg_col
+
+    def visit_aggregate_function(self, node: Node, visited_children: list[Any]) -> str:  # noqa: ARG002
+        return str(node.text)
 
     def visit_expr_aliased(self, node: Node, visited_children: ExprAliasedType) -> Col:  # noqa: ARG002
         col, alias = visited_children
@@ -234,5 +297,8 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
 
 def parse_sql(sql: str) -> DataFrame:
     tree = sql_grammar.parse(sql)
-    df: DataFrame = SQLVisitor().visit(tree)
+    try:
+        df: DataFrame = SQLVisitor().visit(tree)
+    except VisitationError as e:
+        raise e.__context__ from e
     return df

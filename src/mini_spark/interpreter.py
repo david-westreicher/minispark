@@ -1,12 +1,34 @@
+import time
+from copy import deepcopy
+
+from colorama import Fore, Style
+from parsimonious.exceptions import ParseError
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 
-from .execution import PythonExecutionEngine
-from .parser import parse_sql
+from mini_spark.dataframe import DataFrame
+from mini_spark.plan import PhysicalPlan
+
+from .execution import ThreadEngine
+from .parser import SemanticError, parse_sql
 
 kb = KeyBindings()
+
+
+def format_duration(seconds: float) -> str:
+    """Format seconds into a human-readable string."""
+    if seconds < 1:
+        return f"{seconds * 1000:.2f} ms"
+    if seconds < 60:  # noqa: PLR2004
+        return f"{seconds:.2f} s"
+    if seconds < 3600:  # noqa: PLR2004
+        minutes, sec = divmod(seconds, 60)
+        return f"{int(minutes)} min {sec:.2f} s"
+    hours, rem = divmod(seconds, 3600)
+    minutes, sec = divmod(rem, 60)
+    return f"{int(hours)} h {int(minutes)} min {sec:.2f} s"
 
 
 @kb.add("enter")
@@ -34,27 +56,52 @@ BEGIN_PROMPT = r"""
                   /_/              v0.1
 """
 
-print(BEGIN_PROMPT)  # noqa: T201
+print(Fore.BLUE + Style.BRIGHT + BEGIN_PROMPT + Style.RESET_ALL)  # noqa: T201
+
+
+def explain_plan(df: DataFrame) -> None:
+    plan = deepcopy(df.task)
+    print(Style.DIM, end="")  # noqa: T201
+    print("#### Logical Plan:")  # noqa: T201
+    plan.explain()
+    print()  # noqa: T201
+    print("#### Physical Plan:")  # noqa: T201
+    PhysicalPlan.generate_physical_plan(plan).explain()
+    print(Style.RESET_ALL, end="")  # noqa: T201
+    print()  # noqa: T201
+
 
 while True:
     try:
-        # Prompt user
         query = session.prompt("mini> ")
 
         if query.lower() in ("exit;", "quit;"):
             break
 
-        # For now, just echo
-        df = parse_sql(query)
-        with PythonExecutionEngine() as engine:
+        try:
+            df = parse_sql(query)
+        except (ParseError, SemanticError) as e:
+            print(Fore.RED + Style.BRIGHT + f"Parse error: {e}" + Style.RESET_ALL)  # noqa: T201
+            continue
+        with ThreadEngine() as engine:
             df.engine = engine
-            df.show()
+            try:
+                explain_plan(df)
+
+                print(Fore.GREEN, end="")  # noqa: T201
+                start = time.perf_counter()
+                df.show()
+                end = time.perf_counter()
+                print(Style.RESET_ALL, end="")  # noqa: T201
+
+                print(Style.DIM + "Query time: " + format_duration(end - start) + Style.RESET_ALL)  # noqa: T201
+            except Exception as e:  # noqa: BLE001
+                print(Style.RESET_ALL)  # noqa: T201
+                print(Fore.RED + Style.BRIGHT + f"Execution error: {e}" + Style.RESET_ALL)  # noqa: T201
+            print(Style.RESET_ALL)  # noqa: T201
 
     except KeyboardInterrupt:
-        # Ctrl-C clears input
         continue
     except EOFError:
-        # Ctrl-D exits
         break
-
-print("Goodbye!")  # noqa: T201
+print(Fore.BLUE + Style.BRIGHT + "Ciao!" + Style.RESET_ALL)  # noqa: T201

@@ -172,8 +172,10 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output:
                 const col_key = block.cols[0].Str;
                 //{%- for ref in consumer.agg_columns %}
                     //{%- if consumer.before_shuffle %}
+                try Executor.GLOBAL_TRACER.startEvent("project {{ref.real_column.name}}");
                 const col_{{ loop.index0 }} = try allocator.alloc({{ref.zig_type}}, rows);
                 _ = try {{ref.function_name}}(allocator, block, col_{{ loop.index0}});
+                try Executor.GLOBAL_TRACER.endEvent("project {{ref.real_column.name}}");
                     //{%- else %}
                 const col_{{ loop.index0 }} = block.cols[{{ loop.index0 + 1}}].I32;
                     //{%- endif %}

@@ -5,6 +5,7 @@ import pytest
 from mini_spark.dataframe import DataFrame
 from mini_spark.parser import parse_sql
 from mini_spark.sql import BINOP_SYMBOLS, Col, Lit
+from mini_spark.sql import Functions as F  # noqa: N817
 
 
 @pytest.fixture(autouse=True)
@@ -187,4 +188,104 @@ def test_where_compare_operators(operator: Callable[[Col, Col], Col], op_symbol:
 
     # assert
     expected_df = DataFrame().table("table").select(Col("*")).filter(operator(Col("col_1"), Col("col_2")))
+    assert df.task == expected_df.task
+
+
+def test_groupby_simple():
+    # arrange
+    sql = """
+        SELECT col_1, SUM(col_2) FROM 'table' GROUP BY col_1;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .group_by(Col("col_1"))
+        .agg(F.sum(Col("col_2")))
+        .select(
+            Col("col_1"),
+            Col("sum_col_2"),
+        )
+    )
+    assert df.task == expected_df.task
+
+
+def test_groupby_complex():
+    # arrange
+    sql = """
+        SELECT SUM(col_2), MIN(col_3), MAX(col_4), COUNT() FROM 'table' GROUP BY col_1;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .group_by(Col("col_1"))
+        .agg(
+            F.sum(Col("col_2")),
+            F.min(Col("col_3")),
+            F.max(Col("col_4")),
+            F.count(),
+        )
+        .select(
+            Col("sum_col_2"),
+            Col("min_col_3"),
+            Col("max_col_4"),
+            Col("count"),
+        )
+    )
+    assert df.task == expected_df.task
+
+
+def test_groupby_agg_expression():
+    # arrange
+    sql = """
+        SELECT col_1, SUM(col_2 * 2) FROM 'table' GROUP BY col_1;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .group_by(Col("col_1"))
+        .agg(
+            F.sum(Col("col_2") * 2),
+        )
+        .select(Col("col_1"), Col("sum_col_2_mul_lit_2"))
+    )
+    assert df.task == expected_df.task
+
+
+def test_groupby_agg_alias():
+    # arrange
+    sql = """
+        SELECT col_1, SUM(col_2) AS col_3 FROM 'table' GROUP BY col_1;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .group_by(Col("col_1"))
+        .agg(
+            F.sum(Col("col_2")).alias("col_3"),
+        )
+        .select(
+            Col("col_1"),
+            Col("col_3"),
+        )
+    )
     assert df.task == expected_df.task

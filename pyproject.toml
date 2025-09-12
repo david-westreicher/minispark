@@ -8,6 +8,7 @@ version = "0.1.0"
 authors = [{ name = "David Westreicher" }]
 requires-python = ">=3.13"
 dependencies = [
+    "colorama==0.4.6",
     "prompt_toolkit==3.0.52",
     "parsimonious==0.10.0",
     "pytest==8.4.1",
@@ -42,6 +43,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "tabulate.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "colorama.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
