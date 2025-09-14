@@ -14,17 +14,19 @@ from .dataframe import DataFrame
 
 sql_grammar = Grammar(
     r"""
-    query            = ws? "SELECT" ws select_list ws "FROM" ws table_name (ws join_clause)* (ws where_clause)?
+    query            = ws? "SELECT" ws select_list ws "FROM" ws table_reference (ws join_clause)* (ws where_clause)?
                       (ws group_by_clause)? ws? ";" ws?
 
     select_list      = select_item (ws? "," ws? select_item)*
     select_item      = star / aggregate_function_call / expr_aliased
+    table_reference  = table_name alias?
     expr_aliased     = expr alias?
     aggregate_function_call = aggregate_function "(" expr? ")" alias?
     aggregate_function = "COUNT" / "SUM" / "AVG" / "MIN" / "MAX"
     alias            = ws "AS" ws identifier
 
-    join_clause      = "JOIN" ws table_name ws "ON" ws condition
+    join_clause      = join_type ws table_reference ws "ON" ws condition
+    join_type        = "JOIN" / ("LEFT" ws "JOIN") / ("RIGHT" ws "JOIN") / ("INNER" ws "JOIN") / ("FULL" ws "JOIN")
     where_clause     = "WHERE" ws condition
     group_by_clause  = "GROUP" ws "BY" ws column_name (ws? "," ws? column_name)*
 
@@ -51,7 +53,7 @@ sql_grammar = Grammar(
     # --- Terminals ---
     star             = "*"
     table_name       = "'" ~"[a-zA-Z0-9_\\-\\.\\/ ]+" "'"
-    column_name      = ~"[A-Za-z_][A-Za-z0-9_]*"
+    column_name      = ~"[A-Za-z_][A-Za-z0-9_\\.]*"
     identifier       = ~"[A-Za-z_][A-Za-z0-9_]*"
     number           = "-"? ~"[0-9]+(\\.[0-9]+)?"
     string_literal   = "'" ~"[^']*" "'"
@@ -87,6 +89,7 @@ ComparatorType = Callable[[Col, Col | ColumnTypePython], Col]
 ComparisonType = tuple[Col, Any, ComparatorType, Any, Col | ColumnTypePython]
 ParenthisedConditionType = tuple[Any, Any, Col, Any, Any]
 AtomType = tuple[Col]
+TableReferenceType = tuple[DataFrame, list[str] | Node]
 
 
 class SemanticError(Exception):
@@ -103,6 +106,13 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
     def visit_table_name(self, node: Node, visited_children: list[Any]) -> DataFrame:  # noqa: ARG002
         _, table_name, _ = visited_children
         return DataFrame().table(table_name.text)
+
+    def visit_table_reference(self, node: Node, visited_children: TableReferenceType) -> DataFrame:  # noqa: ARG002
+        load_table, alias = visited_children
+        if type(alias) is list:
+            (alias_name,) = alias
+            load_table = load_table.alias(alias_name)
+        return load_table
 
     def visit_query(self, node: Node, visited_children: QueryType) -> DataFrame:  # noqa: ARG002
         _, _, _, select_list, _, _, _, load_table, join_clause, where_clause, group_by_clause, _, _, _ = (

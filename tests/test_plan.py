@@ -49,6 +49,21 @@ def test_physical_plan_infer_load_table(test_data_file: str):
     ]
 
 
+def test_physical_plan_infer_load_table_alias(test_data_file: str):
+    # arrange
+    task = LoadTableBlockTask(VoidTask(), file_path=Path(test_data_file), alias="f")
+
+    # act
+    PhysicalPlan.infer_schema(task)
+
+    # assert
+    assert task.inferred_schema == [
+        ("f.fruit", ColumnType.STRING),
+        ("f.quantity", ColumnType.INTEGER),
+        ("f.color", ColumnType.STRING),
+    ]
+
+
 def test_physical_plan_infer_project(test_data_file: str):
     # arrange
     task = ProjectTask(
