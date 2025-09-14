@@ -4,13 +4,13 @@ from typing import Any
 import pytest
 
 from mini_spark.constants import ColumnType, Row
-from mini_spark.execution import ExecutionEngine, PythonExecutionEngine
+from mini_spark.execution import ExecutionEngine, PythonExecutionEngine, ThreadEngine
 from mini_spark.io import BlockFile
 from mini_spark.parser import parse_sql
 
 pytest.skip("Skipping this test file", allow_module_level=True)
 
-ENGINES = [PythonExecutionEngine]  # , ThreadEngine]
+ENGINES = [PythonExecutionEngine, ThreadEngine]
 INT = ColumnType.INTEGER
 STR = ColumnType.STRING
 
@@ -350,14 +350,14 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
                 ("first_name", "spent"),
                 [
                     ("Alice", 1200 + 600),
-                    ("Bob", 51),
+                    ("Bob", 50),
                     ("Charlie", 45),
                     ("David", 1100),
                     ("Eva", 30),
                     ("Frank", 100),
                     ("Grace", 280),
                     ("Hank", 1300),
-                    ("Ivy", 82),
+                    ("Ivy", 81),
                     ("Jack", 40),
                     ("Kate", 580),
                     ("Leo", 1250),

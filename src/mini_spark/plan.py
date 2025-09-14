@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 from .io import BlockFile
 from .jobs import Job, JobResult, JoinJob, LoadShuffleFilesJob, OutputFile, ScanJob
-from .sql import BinaryOperatorColumn
+from .sql import BinaryOperatorColumn, Col
 from .tasks import (
     AggregateTask,
     BroadcastHashJoinTask,
@@ -15,6 +15,7 @@ from .tasks import (
     LoadShuffleFilesTask,
     LoadTableBlockTask,
     ProducerTask,
+    ProjectTask,
     Task,
     VoidTask,
     WriterTask,
@@ -185,11 +186,30 @@ class PhysicalPlan:
         PhysicalPlan.expand_tasks(task.parent_task)
 
     @staticmethod
+    def cleanup_output_column_names(task: Task) -> None:
+        output_schema = task.inferred_schema
+        assert output_schema is not None
+        if not any("." in col_name for (col_name, _) in output_schema):
+            return
+        clean_columns = [Col(col_name).alias(col_name.split(".")[-1]) for (col_name, _) in output_schema]
+        task.parent_task = ProjectTask(task.parent_task, columns=clean_columns)
+        new_output_schema = list(
+            zip(
+                [col.name for col in clean_columns],
+                [col_type for (_, col_type) in output_schema],
+                strict=True,
+            )
+        )
+        task.parent_task.inferred_schema = new_output_schema
+        task.inferred_schema = new_output_schema
+
+    @staticmethod
     @trace("Physical Plan Generation")
     def generate_physical_plan(full_task: Task) -> PhysicalPlan:
         full_task = WriteToLocalFileTask(full_task)
         PhysicalPlan.expand_tasks(full_task)
         PhysicalPlan.infer_schema(full_task)
+        PhysicalPlan.cleanup_output_column_names(full_task)
         stages = list(reversed(list(split_into_stages(full_task))))
         for stage_id, stage in enumerate(stages):
             stage.late_initialize(stage_id=str(stage_id))

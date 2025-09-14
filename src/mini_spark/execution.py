@@ -32,6 +32,11 @@ if TYPE_CHECKING:
     from .tasks import Task
 
 
+class ExecutionError(Exception):
+    def __init__(self, message: str = "Execution failed") -> None:
+        super().__init__(message)
+
+
 class ExecutionEngine(AbstractContextManager["ExecutionEngine"], ABC):
     @abstractmethod
     def execute_full_task(self, full_task: Task) -> list[JobResult]: ...
@@ -115,12 +120,14 @@ class ThreadWorkerPool:
     def __init__(self, binary: Path, num_workers: int, work_folder: Path) -> None:
         self.job_queue: queue.Queue[tuple[int, Job]] = queue.Queue()
         self.result_queue: queue.Queue[JobResult] = queue.Queue()
+        self.fail_event = threading.Event()
         self.workers = [
             ThreadWorker(
                 str(worker_id),
                 binary,
                 self.job_queue,
                 self.result_queue,
+                self.fail_event,
                 work_folder,
             )
             for worker_id in range(num_workers)
@@ -130,7 +137,13 @@ class ThreadWorkerPool:
     def execute_jobs_on_workers(self, stage_id: int, jobs: list[Job]) -> list[JobResult]:
         for job in jobs:
             self.job_queue.put((stage_id, job))
-        self.job_queue.join()
+        while True:
+            with self.job_queue.all_tasks_done:
+                if self.job_queue.unfinished_tasks == 0:
+                    break
+                self.job_queue.all_tasks_done.wait(0.0001)
+            if self.fail_event.is_set():
+                raise ExecutionError
         results: list[JobResult] = []
         while len(results) < len(jobs):
             results.append(self.result_queue.get())
@@ -144,18 +157,20 @@ class ThreadWorkerPool:
 
 
 class ThreadWorker(threading.Thread):
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         worker_id: str,
         binary: Path,
         job_queue: queue.Queue[tuple[int, Job]],
         result_queue: queue.Queue[JobResult],
+        fail_event: threading.Event,
         work_folder: Path,
     ) -> None:
         super().__init__(daemon=True)
         self.worker_id = worker_id
         self.job_queue = job_queue
         self.result_queue = result_queue
+        self.fail_event = fail_event
         trace_file = work_folder / f"{worker_id}_trace.pftrace"
         self.process = subprocess.Popen(  # noqa: S603
             [
@@ -197,6 +212,10 @@ class ThreadWorker(threading.Thread):
                 TRACER.end(self.track_uuid)
             except queue.ShutDown:
                 self.stop_process()
+                break
+            except Exception as e:  # noqa: BLE001
+                print(f"Worker {self.worker_id} failed: {e}", file=sys.stderr)  # noqa: T201
+                self.fail_event.set()
                 break
 
     def stop_process(self) -> None:

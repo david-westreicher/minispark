@@ -111,6 +111,7 @@ class ProjectTask(ConsumerTask):
 @dataclass(kw_only=True)
 class LoadTableBlockTask(ProducerTask):
     file_path: Path
+    alias: str = ""
 
     @trace_yield("LoadTableBlockTask")
     def generate_chunks(self, job: Job) -> Iterable[tuple[Columns | None, bool]]:
@@ -125,7 +126,9 @@ class LoadTableBlockTask(ProducerTask):
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
         assert schema == []
-        return self.file_schema
+        if not self.alias:
+            return self.file_schema
+        return [(f"{self.alias}.{col_name}", col_type) for col_name, col_type in self.file_schema]
 
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")

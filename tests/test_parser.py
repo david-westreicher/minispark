@@ -29,6 +29,20 @@ def test_select_all():
     assert df.task == expected_df.task
 
 
+def test_table_alias():
+    # arrange
+    sql = """
+        SELECT * FROM 'table' AS t;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = DataFrame().table("table").alias("t").select(Col("*"))
+    assert df.task == expected_df.task
+
+
 def test_select_columns():
     # arrange
     sql = """
@@ -48,6 +62,27 @@ def test_select_columns():
             Col("col3").alias("col_3"),
             Col("*"),
             Col("col_4"),
+        )
+    )
+    assert df.task == expected_df.task
+
+
+def test_select_columns_from_aliased_table():
+    # arrange
+    sql = """
+        SELECT t.col FROM 'table' AS t;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .alias("t")
+        .select(
+            Col("t.col"),
         )
     )
     assert df.task == expected_df.task
@@ -331,6 +366,28 @@ def test_join():
         .select(
             Col("col_1"),
             Col("col_2"),
+        )
+    )
+    assert df.task == expected_df.task
+
+
+def test_join_alias():
+    # arrange
+    sql = """
+        SELECT * FROM 'table' AS t1 JOIN 'table' AS t2 ON col_1 = col_2;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .alias("t1")
+        .join(DataFrame().table("table").alias("t2"), on=Col("col_1") == Col("col_2"), how="inner")
+        .select(
+            Col("*"),
         )
     )
     assert df.task == expected_df.task

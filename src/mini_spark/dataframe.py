@@ -45,6 +45,11 @@ class DataFrame:
         self.task = LoadTableBlockTask(self.task, file_path=Path(file_path))
         return self
 
+    def alias(self, alias_name: str) -> Self:
+        assert type(self.task) is LoadTableBlockTask, "Alias can only be applied to table"
+        self.task.alias = alias_name
+        return self
+
     def select(self, *columns: Col) -> Self:
         self.task = ProjectTask(self.task, columns=list(columns))
         return self

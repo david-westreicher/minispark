@@ -36,7 +36,8 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block) ![]u8 {
         //{%- if col.struct_type == 'Str' %}
         const value_to_hash: []const u8 = {{col.zig_code}};
         //{%- else %}
-        const value_to_hash: []const u8 = @ptrCast(&({{col.zig_code}})[0..@sizeOf({{col.zig_type}})]);
+        const value = {{col.zig_code}};
+        const value_to_hash: []const u8 = std.mem.asBytes(&value);
         //{%- endif %}
         partition_per_row[_idx] = @intCast(std.hash.Murmur3_32.hash(value_to_hash) & 0xF);
     }
