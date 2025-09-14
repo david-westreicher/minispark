@@ -90,10 +90,11 @@ while True:
 
                 print(Fore.GREEN, end="")  # noqa: T201
                 start = time.perf_counter()
-                df.show()
+                rows = df.show(n=1000)
                 end = time.perf_counter()
                 print(Style.RESET_ALL, end="")  # noqa: T201
 
+                print(Style.DIM + "Rows: " + str(rows) + Style.RESET_ALL)  # noqa: T201
                 print(Style.DIM + "Query time: " + format_duration(end - start) + Style.RESET_ALL)  # noqa: T201
             except Exception as e:  # noqa: BLE001
                 print(Style.RESET_ALL)  # noqa: T201

@@ -14,8 +14,8 @@ from .dataframe import DataFrame
 
 sql_grammar = Grammar(
     r"""
-    query            = ws? "SELECT" ws select_list ws "FROM" ws table_name (ws where_clause)? (ws group_by_clause)?
-                       ws? ";" ws?
+    query            = ws? "SELECT" ws select_list ws "FROM" ws table_name (ws join_clause)* (ws where_clause)?
+                      (ws group_by_clause)? ws? ";" ws?
 
     select_list      = select_item (ws? "," ws? select_item)*
     select_item      = star / aggregate_function_call / expr_aliased
@@ -24,6 +24,7 @@ sql_grammar = Grammar(
     aggregate_function = "COUNT" / "SUM" / "AVG" / "MIN" / "MAX"
     alias            = ws "AS" ws identifier
 
+    join_clause      = "JOIN" ws table_name ws "ON" ws condition
     where_clause     = "WHERE" ws condition
     group_by_clause  = "GROUP" ws "BY" ws column_name (ws? "," ws? column_name)*
 
@@ -32,9 +33,9 @@ sql_grammar = Grammar(
     or_expr          = and_expr (ws "OR" ws and_expr)*
     and_expr         = not_expr (ws "AND" ws not_expr)*
     not_expr         = ("NOT" ws)? predicate
-    predicate        = comparison / parenthised_condition
+    predicate        = comparison / parenthised_condition / string_literal
     parenthised_condition = "(" ws? condition ws? ")"
-    comparison       = expr ws comparator ws expr
+    comparison       = expr ws? comparator ws? expr
 
     comparator       = "=" / "!=" / "<=" / ">=" / "<" / ">"
 
@@ -44,15 +45,15 @@ sql_grammar = Grammar(
     mul_expr         = atom (ws? mul_op ws? atom)*
     add_op           = "+" / "-"
     mul_op           = "*" / "/"
-    atom             = number / column_name / parenthised_expr
+    atom             = number / column_name / parenthised_expr / string_literal
     parenthised_expr = "(" ws? expr ws? ")"
 
     # --- Terminals ---
     star             = "*"
-    table_name       = "'" ~"[a-zA-Z0-9_\\-\\. ]+" "'"
+    table_name       = "'" ~"[a-zA-Z0-9_\\-\\.\\/ ]+" "'"
     column_name      = ~"[A-Za-z_][A-Za-z0-9_]*"
     identifier       = ~"[A-Za-z_][A-Za-z0-9_]*"
-    number           = ~"[0-9]+(\\.[0-9]+)?"
+    number           = "-"? ~"[0-9]+(\\.[0-9]+)?"
     string_literal   = "'" ~"[^']*" "'"
     value            = number / string_literal
 
@@ -60,8 +61,8 @@ sql_grammar = Grammar(
     """
 )
 
-#                 ws   sel  ws   sell ws   from ws   table      maybe      ws,  wher          grou ws   ;    ws
-QueryType = tuple[Any, Any, Any, Any, Any, Any, Any, DataFrame, list[tuple[Any, Col]] | Node, Any, Any, Any, Any]
+#                 ws   sel  ws   sell ws   from ws   table      join maybe      ws,  wher          grou ws   ;    ws
+QueryType = tuple[Any, Any, Any, Any, Any, Any, Any, DataFrame, Any, list[tuple[Any, Col]] | Node, Any, Any, Any, Any]
 #                 wher ws   cond
 WhereType = tuple[Any, Any, Col]
 #                  left repeat         ws   OR   ws   right
@@ -104,7 +105,22 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
         return DataFrame().table(table_name.text)
 
     def visit_query(self, node: Node, visited_children: QueryType) -> DataFrame:  # noqa: ARG002
-        _, _, _, select_list, _, _, _, load_table, where_clause, group_by_clause, _, _, _ = visited_children
+        _, _, _, select_list, _, _, _, load_table, join_clause, where_clause, group_by_clause, _, _, _ = (
+            visited_children
+        )
+        df = load_table
+
+        # add joins
+        if type(join_clause) is list:
+            for _, (subquery, cond) in join_clause:
+                df = df.join(subquery, on=cond, how="inner")
+
+        # add filter
+        if type(where_clause) is list:
+            ((_, where),) = where_clause
+            df = df.filter(where)
+
+        # add groupby
         if type(group_by_clause) is list:
             _, group_by_cols = group_by_clause[0]
             group_by_col_names = {col.name for col in group_by_cols}
@@ -117,13 +133,8 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
                     "All selected columns must be aggregate functions or part of the key when using GROUP BY:\n"
                     f"{invalid_agg_cols}"
                 )
-            return load_table.group_by(*group_by_cols).agg(*agg_cols).select(*[Col(col.name) for col in select_list])
-        df = load_table.select(*select_list)
-        if type(where_clause) is list:
-            assert len(where_clause) == 1
-            _, where = where_clause[0]
-            df = df.filter(where)
-        return df
+            return df.group_by(*group_by_cols).agg(*agg_cols).select(*[Col(col.name) for col in select_list])
+        return load_table.select(*select_list)
 
     def visit_select_list(self, node: Node, visited_children: SelectList) -> list[Col]:  # noqa: ARG002
         selections = [visited_children[0]]
@@ -131,6 +142,10 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
             _, _, _, select_item = right_expansion
             selections.append(select_item)
         return selections
+
+    def visit_join_clause(self, node: Node, visited_children: list[Any]) -> tuple[DataFrame, Col]:  # noqa: ARG002
+        _, _, table, _, _, _, condition = visited_children
+        return (table, condition)
 
     def visit_where_clause(self, node: Node, visited_children: WhereType) -> Col:  # noqa: ARG002
         _, _, condition = visited_children
@@ -179,6 +194,13 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
         return str(node.text)
 
     def visit_expr_aliased(self, node: Node, visited_children: ExprAliasedType) -> Col:  # noqa: ARG002
+        col, alias = visited_children
+        if type(alias) is list:
+            assert len(alias) == 1
+            return col.alias(alias[0])
+        return col
+
+    def visit_string_literal_aliased(self, node: Node, visited_children: ExprAliasedType) -> Col:  # noqa: ARG002
         col, alias = visited_children
         if type(alias) is list:
             assert len(alias) == 1
@@ -275,8 +297,9 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
     def visit_value(self, node: Node, visited_children: list[ColumnTypePython]) -> ColumnTypePython:  # noqa: ARG002
         return visited_children[0]
 
-    def visit_string_literal(self, node: Node, visited_children: AliasType) -> str:  # noqa: ARG002
-        return str(node.text)
+    def visit_string_literal(self, node: Node, visited_children: list[Any]) -> str:  # noqa: ARG002
+        _, literal, _ = visited_children
+        return str(literal.text)
 
     def visit_number(self, node: Node, visited_children: AliasType) -> Lit:  # noqa: ARG002
         return Lit(int(node.text))
