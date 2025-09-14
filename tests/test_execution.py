@@ -186,19 +186,21 @@ def test_groupby_single_col_multiple_agg(test_data: str, engine_factory: type[Ex
     assert rows == expected_rows
 
 
-def test_join(test_data: str):
+@pytest.mark.parametrize("engine_factory", ENGINES)
+def test_join(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
-    rows = (
-        DataFrame()
-        .table(test_data)
-        .select(Col("fruit").alias("fruit_left"), Col("color"))
-        .join(
-            DataFrame().table(test_data).select(Col("fruit").alias("fruit_right"), Col("quantity")),
-            on=Col("fruit_left") == Col("fruit_right"),
-            how="inner",
+    with engine_factory() as engine:
+        rows = (
+            DataFrame(engine)
+            .table(test_data)
+            .select(Col("fruit").alias("fruit_left"), Col("color"))
+            .join(
+                DataFrame().table(test_data).select(Col("fruit").alias("fruit_right"), Col("quantity")),
+                on=Col("fruit_left") == Col("fruit_right"),
+                how="inner",
+            )
+            .collect()
         )
-        .collect()
-    )
 
     # assert
     expected_rows = [

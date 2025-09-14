@@ -59,24 +59,28 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output:
 
 // ###### Projection columns
 //{% for col in plan.projection_columns %}
-pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output: []{{col.zig_type}}) !ColumnData {
-    //{%- if col.struct_type == 'I32' %}
-    _ = allocator;
-    //{%- endif %}
-    //{%- if not col.column_names %}
-    _ = block;
-    //{%- endif %}
-    //{%- for ref in col.references %}
-    const col_{{ref.name}} = block.cols[{{ref.pos}}].{{ref.struct_type}};
-    //{%- endfor %}
-    for ({{col.column_names + ("," if col.column_names else "")}} 0..output.len) |{{col.names + ("," if col.column_names else "")}} _idx| {
-        output[_idx] = {{col.zig_code}};
-    }
-    const const_out = output;
-    //{%- if col.struct_type == 'Str' %}
-    return ColumnData{ .{{col.struct_type}} = try StringColumn.init(allocator, const_out) };
+pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: usize) !ColumnData {
+    //{%- if col.is_direct_column %}
+        _ = allocator;
+        _ = rows;
+        return ColumnData{ .{{col.struct_type}} = block.cols[{{col.direct_column_pos}}].{{col.struct_type}} };
     //{%- else %}
-    return ColumnData{ .{{col.struct_type}} = const_out };
+        const output_buffer = try allocator.alloc({{col.zig_type}}, rows);
+        //{%- if not col.column_names %}
+        _ = block;
+        //{%- endif %}
+        //{%- for ref in col.references %}
+        const col_{{ref.name}} = block.cols[{{ref.pos}}].{{ref.struct_type}};
+        //{%- endfor %}
+        for ({{col.column_names + ("," if col.column_names else "")}} 0..rows) |{{col.names + ("," if col.column_names else "")}} _idx| {
+            output_buffer[_idx] = {{col.zig_code}};
+        }
+        const const_out = output_buffer;
+        //{%- if col.struct_type == 'Str' %}
+        return ColumnData{ .{{col.struct_type}} = try StringColumn.init(allocator, const_out) };
+        //{%- else %}
+        return ColumnData{ .{{col.struct_type}} = const_out };
+        //{%- endif %}
     //{%- endif %}
 }
 //{%- endfor %}
@@ -95,8 +99,7 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output:
             const slice: []ColumnData = try allocator.alloc(ColumnData, {{consumer.input_columns}});
 
             //{%- for col in consumer.columns %}
-            const col_{{ loop.index0 }} = try allocator.alloc({{col.zig_type}}, rows);
-            slice[{{ loop.index0 }}] = try {{col.function_name}}(allocator, block, col_{{ loop.index0}});
+            slice[{{ loop.index0 }}] = try {{col.function_name}}(allocator, block, rows);
             //{%- endfor %}
 
             try Executor.GLOBAL_TRACER.endEvent("{{consumer.function_name}}");
@@ -173,8 +176,7 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output:
                 //{%- for ref in consumer.agg_columns %}
                     //{%- if consumer.before_shuffle %}
                 try Executor.GLOBAL_TRACER.startEvent("project {{ref.real_column.name}}");
-                const col_{{ loop.index0 }} = try allocator.alloc({{ref.zig_type}}, rows);
-                _ = try {{ref.function_name}}(allocator, block, col_{{ loop.index0}});
+                const col_{{ loop.index0 }} = (try {{ref.function_name}}(allocator, block, rows)).{{ref.struct_type}};
                 try Executor.GLOBAL_TRACER.endEvent("project {{ref.real_column.name}}");
                     //{%- else %}
                 const col_{{ loop.index0 }} = block.cols[{{ loop.index0 + 1}}].I32;
@@ -296,6 +298,20 @@ pub fn {{ stage.function_name }}(allocator: std.mem.Allocator, job: Job) !void {
     var producer = try Executor.LoadTableBlockProducer.init(allocator, job.input_file orelse @panic("input file not set"), job.input_block_id);
     //{%- elif stage.producer.is_load_shuffles %}
     var producer = try Executor.LoadShuffleFilesProducer.init(allocator, job.shuffle_files orelse @panic("shuffle files not set"));
+    //{%- elif stage.producer.is_join %}
+    const left_schema = Schema{ .columns = (&[_]ColumnSchema{
+        //{%- for col_name, col_type in stage.producer.left_schema %}
+        .{ .typ = Executor.TYPE_{{col_type.zig_type.upper()}}, .name = "{{col_name}}" },
+        //{%- endfor %}
+    })[0..] };
+    var producer = try Executor.JoinProducer.init(
+        allocator,
+        job.shuffle_files orelse @panic("input file not set"),
+        {{stage.producer.left_key.function_name}},
+        left_schema,
+        job.right_shuffle_files orelse @panic("right input file not set"),
+        {{stage.producer.right_key.function_name}},
+    );
     //{%- endif %}
     //{%- for consumer in stage.consumers %}
         //{%- if consumer.is_aggregate %}
