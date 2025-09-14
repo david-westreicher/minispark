@@ -11,6 +11,7 @@ from .plan import PhysicalPlan, Stage
 from .sql import Col
 from .tasks import (
     AggregateTask,
+    BroadcastHashJoinTask,
     ConsumerTask,
     FilterTask,
     LoadShuffleFilesTask,
@@ -63,6 +64,11 @@ class JinjaColumn:
         self.names = ",".join(ref.name for ref in self.references)
         self.zig_code = column.zig_code_representation(input_schema)
         self.real_column = column
+        self.is_direct_column = type(column) is Col
+        if self.is_direct_column:
+            self.direct_column_pos = next(
+                col_pos for col_pos, (col_name, _) in enumerate(input_schema) if col_name == column.name
+            )
 
 
 class JinjaProducer:
@@ -70,6 +76,21 @@ class JinjaProducer:
         self.function_name = function_name
         self.is_load_table_block = type(producer) is LoadTableBlockTask
         self.is_load_shuffles = type(producer) is LoadShuffleFilesTask
+        self.is_join = type(producer) is BroadcastHashJoinTask
+        self.projection_columns = []
+        if self.is_join:
+            assert type(producer) is BroadcastHashJoinTask
+            assert producer.left_key
+            assert producer.left_schema
+            assert producer.right_key
+            assert producer.right_schema
+            self.left_schema = producer.left_schema
+            self.left_key = JinjaColumn(producer.left_key, f"{function_name}_project_left", producer.left_schema)
+            self.right_key = JinjaColumn(producer.right_key, f"{function_name}_project_right", producer.right_schema)
+            self.projection_columns = [self.left_key, self.right_key]
+
+    def get_projection_columns(self) -> Iterable[JinjaColumn]:
+        yield from self.projection_columns
 
 
 class JinjaConsumer:
@@ -172,6 +193,7 @@ class JinjaStage:
         self.writer = JinjaWriter(stage.writer, writer_function_name)
 
     def get_projection_columns(self) -> Iterable[JinjaColumn]:
+        yield from self.producer.get_projection_columns()
         for consumer in self.consumers:
             yield from consumer.get_projection_columns()
 

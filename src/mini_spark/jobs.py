@@ -65,3 +65,15 @@ class LoadShuffleFilesJob(Job):
 class JoinJob(Job):
     left_shuffle_files: list[OutputFile]
     right_shuffle_files: list[OutputFile]
+
+    def encode(self) -> bytes:
+        shuffle_files = set(self.left_shuffle_files)
+        right_shuffle_files = set(self.right_shuffle_files)
+        job_type = 2
+        return (
+            bytes([job_type])
+            + to_unsigned_int(len(shuffle_files))
+            + b"".join([encode_string(str(f.file_path.absolute())) for f in shuffle_files])
+            + to_unsigned_int(len(right_shuffle_files))
+            + b"".join([encode_string(str(f.file_path.absolute())) for f in right_shuffle_files])
+        )

@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const SIZE_32KB = 32 * 1024;
-const ROWS_PER_BLOCK = 2 * 1024 * 1024;
+pub const ROWS_PER_BLOCK = 2 * 1024 * 1024;
 
 pub const TYPE_I32: u8 = 0;
 pub const TYPE_STR: u8 = 1;
@@ -296,6 +296,23 @@ pub const Block = struct {
     pub fn rows(self: Block) usize {
         return self.cols[0].len();
     }
+
+    pub fn printContent(self: Block) void {
+        std.debug.print("rows: {d}\n", .{self.rows()});
+        for (0..self.rows()) |row_idx| {
+            for (self.cols) |col| {
+                switch (col) {
+                    .I32 => |vals| {
+                        std.debug.print("{d}\t\t", .{vals[row_idx]});
+                    },
+                    .Str => |vals| {
+                        std.debug.print("{s}\t\t", .{vals.slices[row_idx]});
+                    },
+                }
+            }
+            std.debug.print("\n", .{});
+        }
+    }
 };
 
 pub const BlockFile = struct {
@@ -435,20 +452,7 @@ pub const BlockFile = struct {
         std.debug.print("\n", .{});
         for (self.block_starts.items, 0..) |_, i| {
             const block = try self.readBlock(@intCast(i));
-            const rows = block.rows();
-            for (0..rows) |row_idx| {
-                for (block) |col| {
-                    switch (col) {
-                        .I32 => |vals| {
-                            std.debug.print("{d}\t\t", .{vals[row_idx]});
-                        },
-                        .Str => |vals| {
-                            std.debug.print("{s}\t\t", .{vals[row_idx]});
-                        },
-                    }
-                }
-                std.debug.print("\n", .{});
-            }
+            block.printContent();
         }
     }
 };
