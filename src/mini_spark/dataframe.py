@@ -64,7 +64,8 @@ class DataFrame:
         job_results = self.engine.execute_full_task(self.task)
         return list(self.engine.collect_results(job_results))
 
-    def show(self, n: int = 10) -> None:
+    def show(self, n: int = 10) -> int:
         results = self.engine.execute_full_task(self.task)
         rows = list(self.engine.collect_results(results, limit=n))
         print(tabulate(rows, tablefmt="rounded_outline", headers="keys"))  # noqa: T201
+        return len(rows)

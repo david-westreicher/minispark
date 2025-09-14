@@ -91,7 +91,7 @@ def test_where_compare_col_value():
     df = parse_sql(sql)
 
     # assert
-    expected_df = DataFrame().table("table").select(Col("*")).filter(Col("col_1") > Lit(100))
+    expected_df = DataFrame().table("table").filter(Col("col_1") > Lit(100)).select(Col("*"))
     assert df.task == expected_df.task
 
 
@@ -105,7 +105,7 @@ def test_where_compare_col_col():
     df = parse_sql(sql)
 
     # assert
-    expected_df = DataFrame().table("table").select(Col("*")).filter(Col("col_1") > Col("col_2"))
+    expected_df = DataFrame().table("table").filter(Col("col_1") > Col("col_2")).select(Col("*"))
     assert df.task == expected_df.task
 
 
@@ -119,7 +119,7 @@ def test_where_compare_value_col():
     df = parse_sql(sql)
 
     # assert
-    expected_df = DataFrame().table("table").select(Col("*")).filter(Lit(100) > Col("col_2"))
+    expected_df = DataFrame().table("table").filter(Lit(100) > Col("col_2")).select(Col("*"))
     assert df.task == expected_df.task
 
 
@@ -136,8 +136,8 @@ def test_where_complex_comparison():
     expected_df = (
         DataFrame()
         .table("table")
-        .select(Col("*"))
         .filter((Lit(100) > Col("col_2")) & ((Col("col_2") < Col("col_3")) | (Col("col_4") != Lit(20))))
+        .select(Col("*"))
     )
     assert df.task == expected_df.task
 
@@ -152,7 +152,7 @@ def test_where_expression():
     df = parse_sql(sql)
 
     # assert
-    expected_df = DataFrame().table("table").select(Col("*")).filter(Col("col_2") * 10 > Col("col_1") + 2)
+    expected_df = DataFrame().table("table").filter(Col("col_2") * 10 > Col("col_1") + 2).select(Col("*"))
     assert df.task == expected_df.task
 
 
@@ -168,7 +168,7 @@ def test_where_compare_equality(monkeypatch: pytest.MonkeyPatch):
     df = parse_sql(sql)
 
     # assert
-    expected_df = DataFrame().table("table").select(Col("*")).filter(Col("col_1") == Col("col_2"))
+    expected_df = DataFrame().table("table").filter(Col("col_1") == Col("col_2")).select(Col("*"))
     monkeypatch.setattr(Col, "__eq__", lambda a, b: repr(a) == repr(b))
     assert df.task == expected_df.task
 
@@ -187,7 +187,7 @@ def test_where_compare_operators(operator: Callable[[Col, Col], Col], op_symbol:
     df = parse_sql(sql)
 
     # assert
-    expected_df = DataFrame().table("table").select(Col("*")).filter(operator(Col("col_1"), Col("col_2")))
+    expected_df = DataFrame().table("table").filter(operator(Col("col_1"), Col("col_2"))).select(Col("*"))
     assert df.task == expected_df.task
 
 
@@ -286,6 +286,51 @@ def test_groupby_agg_alias():
         .select(
             Col("col_1"),
             Col("col_3"),
+        )
+    )
+    assert df.task == expected_df.task
+
+
+def test_groupby_where():
+    # arrange
+    sql = """
+        SELECT col_1 FROM 'table' WHERE col_1 > col_2 GROUP BY col_1 ;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .filter(Col("col_1") > Col("col_2"))
+        .group_by(Col("col_1"))
+        .agg()
+        .select(
+            Col("col_1"),
+        )
+    )
+    assert df.task == expected_df.task
+
+
+def test_join():
+    # arrange
+    sql = """
+        SELECT col_1, col_2 FROM 'table' JOIN 'table' ON col_1 = col_2;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .join(DataFrame().table("table"), on=Col("col_1") == Col("col_2"), how="inner")
+        .select(
+            Col("col_1"),
+            Col("col_2"),
         )
     )
     assert df.task == expected_df.task
