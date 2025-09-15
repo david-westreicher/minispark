@@ -72,6 +72,9 @@ class Col:
     def alias(self, name: str) -> Col:
         return AliasColumn(self, name)
 
+    def normalize_agg_columns(self) -> Col:
+        return self
+
     @property
     def all_nested_columns(self) -> Iterable[Col]:
         yield self
@@ -298,6 +301,13 @@ class BinaryOperatorColumn(Col):
             f" ({self.right_side.zig_code_representation(schema)})"
         )
 
+    def normalize_agg_columns(self) -> Col:
+        return BinaryOperatorColumn(
+            left_side=self.left_side.normalize_agg_columns(),
+            right_side=self.right_side.normalize_agg_columns(),
+            operator=self.operator,
+        )
+
 
 @dataclass
 class Lit(Col):
@@ -369,6 +379,9 @@ class AggCol(Col):
         yield self
         if self.original_col:
             yield from self.original_col.all_nested_columns
+
+    def normalize_agg_columns(self) -> Col:
+        return Col(self.name)
 
 
 class Functions:

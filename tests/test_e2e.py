@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,7 @@ from mini_spark.constants import ColumnType, Row
 from mini_spark.execution import ExecutionEngine, PythonExecutionEngine
 from mini_spark.io import BlockFile
 from mini_spark.parser import parse_sql
+from mini_spark.plan import PhysicalPlan
 
 pytest.skip("Skipping this test file", allow_module_level=True)
 
@@ -418,9 +420,9 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
             to_rows(
                 ("country", "orders_count", "total_sales"),
                 [
-                    ("USA", 7, 1200 + 600 + 40 + 580 + 1250 + 1300 + 100),
-                    ("UK", 4, 1100 + 280 + 42 + 290),
-                    ("Canada", 4, 51 + 30 + 82 + 52),
+                    ("USA", 7, 1 * 1200 + 1 * 45 + 2 * 300 + 2 * 50 + 1 * 1300 + 1 * 40 + 1 * 1250),
+                    ("UK", 4, 1 * 1100 + 1 * 280 + 2 * 290 + 1 * 42),
+                    # ("Canada", 4, 213) ignored total_sales <= 500
                 ],
             ),
         ),
@@ -437,6 +439,7 @@ def test_full_query(
     with engine_factory() as engine:
         df = parse_sql(query.format(users=users, orders=products))
         df.task.explain()
+        PhysicalPlan.generate_physical_plan(deepcopy(df.task)).explain()
         df.engine = engine
         rows = df.collect()
 
