@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
 from tabulate import tabulate
+
+from mini_spark.plan import PhysicalPlan
 
 from .execution import ExecutionEngine, PythonExecutionEngine
 from .tasks import (
@@ -74,3 +77,10 @@ class DataFrame:
         rows = list(self.engine.collect_results(results, limit=n))
         print(tabulate(rows, tablefmt="rounded_outline", headers="keys"))  # noqa: T201
         return len(rows)
+
+    def explain(self, *, full: bool = False) -> None:
+        task = deepcopy(self.task)
+        print("Logical Plan")  # noqa: T201
+        task.explain()
+        if full:
+            PhysicalPlan.generate_physical_plan(task).explain()

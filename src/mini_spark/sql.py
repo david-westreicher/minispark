@@ -270,6 +270,8 @@ class BinaryOperatorColumn(Col):
     def infer_type(self, schema: Schema) -> ColumnType:
         left_type = self.left_side.infer_type(schema)
         right_type = self.right_side.infer_type(schema)
+        if left_type == ColumnType.INTEGER and right_type == ColumnType.INTEGER and self.operator == operator.truediv:
+            return ColumnType.FLOAT
         if (left_type, right_type) in COMPATIBLE_TYPE_CONVERSION:
             return COMPATIBLE_TYPE_CONVERSION[(left_type, right_type)]
         if left_type != right_type:
@@ -352,7 +354,7 @@ class Lit(Col):
         raise NotImplementedError(f"Zig code generation for literal {self.value} not implemented")
 
 
-AggregationType = Literal["sum", "min", "max"]
+AggregationType = Literal["sum", "min", "max", "avg"]
 
 
 @dataclass
@@ -368,6 +370,8 @@ class AggCol(Col):
         super().__init__(self.name)
 
     def infer_type(self, schema: Schema) -> ColumnType:
+        if self.type == "avg":
+            return ColumnType.FLOAT
         return self.original_col.infer_type(schema)
 
     def schema_executor(self, schema: Schema) -> Col:
@@ -389,6 +393,18 @@ class AggCol(Col):
     def normalize_agg_columns(self) -> Col:
         return Col(self.name)
 
+    def expand_avg(self) -> Iterable[AggCol]:
+        if self.type == "avg":
+            yield AggCol("sum", self.original_col).alias(f"{self.name}_sum")
+            yield AggCol("sum", Lit(1)).alias(f"{self.name}_count")
+        else:
+            yield self
+
+    def projection(self) -> Col:
+        if self.type == "avg":
+            return (Col(f"{self.name}_sum") / Col(f"{self.name}_count")).alias(self.name)
+        return Col(self.name)
+
 
 class Functions:
     @staticmethod
@@ -406,3 +422,7 @@ class Functions:
     @staticmethod
     def count() -> AggCol:
         return AggCol("sum", Lit(1)).alias("count")
+
+    @staticmethod
+    def avg(col: Col) -> AggCol:
+        return AggCol("avg", col)
