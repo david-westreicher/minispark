@@ -1,4 +1,3 @@
-from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +7,8 @@ from mini_spark.constants import ColumnType, Row
 from mini_spark.execution import ExecutionEngine, PythonExecutionEngine
 from mini_spark.io import BlockFile
 from mini_spark.parser import parse_sql
-from mini_spark.plan import PhysicalPlan
+
+from .conftest import assert_rows_equal
 
 pytest.skip("Skipping this test file", allow_module_level=True)
 
@@ -52,19 +52,6 @@ ORDERS = [
     (14, 13, "Mouse", 2, 26.0, "2025-07-15"),
     (15, 14, "Keyboard", 1, 42.0, "2025-08-01"),
 ]
-
-
-def assert_rows_equal(rows_0: list[Row], rows_1: list[Row]):
-    # sort rows by all keys to ensure order doesn't matter
-    rows_0 = sorted(rows_0, key=lambda r: tuple(r.values()))
-    rows_1 = sorted(rows_1, key=lambda r: tuple(r.values()))
-    for r0, r1 in zip(rows_0, rows_1, strict=True):
-        assert r0.keys() == r1.keys(), f"Row keys mismatch: {r0.keys()} != {r1.keys()}"
-        for key in r0:
-            assert r0[key] == r1[key], f"Row value mismatch for key '{key}': {r0[key]} != {r1[key]}"
-            assert type(r0[key]) is type(r1[key]), (
-                f"Row value type mismatch for key '{key}': {type(r0[key])} != {type(r1[key])}"
-            )
 
 
 @pytest.fixture(autouse=True)
@@ -442,8 +429,7 @@ def test_full_query(
     users, products = test_tables
     with engine_factory() as engine:
         df = parse_sql(query.format(users=users, orders=products))
-        df.task.explain()
-        PhysicalPlan.generate_physical_plan(deepcopy(df.task)).explain()
+        df.explain(full=True)
         df.engine = engine
         rows = df.collect()
 

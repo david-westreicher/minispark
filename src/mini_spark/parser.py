@@ -215,6 +215,10 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
             assert type(arguments) is list
             assert len(arguments) == 1
             agg_col = F.max(arguments[0])
+        if aggregate_function == "AVG":
+            assert type(arguments) is list
+            assert len(arguments) == 1
+            agg_col = F.avg(arguments[0])
         assert agg_col is not None
         if real_alias:
             return agg_col.alias(real_alias)

@@ -179,29 +179,33 @@ class PhysicalPlan:
         PhysicalPlan.infer_schema(task.parent_task)
 
     @staticmethod
-    def expand_tasks(task: Task) -> None:
+    def expand_tasks(task: Task) -> Task:
         if type(task) is VoidTask:
-            return
+            return task
+        task.parent_task = PhysicalPlan.expand_tasks(task.parent_task)
         if type(task) is BroadcastHashJoinTask:
             # TODO(david): decompose join_condition: distribute the right keys to right shuffle task
             assert type(task.join_condition) is BinaryOperatorColumn
             task.left_key = task.join_condition.left_side
             task.right_key = task.join_condition.right_side
+            task.right_side_task = PhysicalPlan.expand_tasks(task.right_side_task)
             task.parent_task = WriteToShufflePartitions(task.parent_task, key_column=task.left_key)
             task.right_side_task = WriteToShufflePartitions(task.right_side_task, key_column=task.right_key)
-            PhysicalPlan.expand_tasks(task.right_side_task)
         if type(task) is AggregateTask:
-            original_parent = task.parent_task
+            original_columns = task.agg_columns
+            agg_columns = [col for agg_col in task.agg_columns for col in agg_col.expand_avg()]
             task.parent_task = AggregateTask(
-                task.parent_task, group_by_column=task.group_by_column, agg_columns=task.agg_columns
+                task.parent_task, group_by_column=task.group_by_column, agg_columns=agg_columns
             )
             task.parent_task = WriteToShufflePartitions(task.parent_task, key_column=task.group_by_column)
             task.parent_task = LoadShuffleFilesTask(task.parent_task)
             task.before_shuffle = False
-            task.agg_columns = [AggCol(col.type, Col(col.name)) for col in task.agg_columns]
-            PhysicalPlan.expand_tasks(original_parent)
-            return
-        PhysicalPlan.expand_tasks(task.parent_task)
+            task.agg_columns = [AggCol(col.type, Col(col.name)) for col in agg_columns]
+            if any(col.type == "avg" for col in original_columns):
+                task = ProjectTask(
+                    task, columns=[Col(task.group_by_column.name)] + [col.projection() for col in original_columns]
+                )
+        return task
 
     @staticmethod
     def cleanup_output_column_names(task: Task) -> None:
@@ -225,7 +229,7 @@ class PhysicalPlan:
     @trace("Physical Plan Generation")
     def generate_physical_plan(full_task: Task) -> PhysicalPlan:
         full_task = WriteToLocalFileTask(full_task)
-        PhysicalPlan.expand_tasks(full_task)
+        full_task = PhysicalPlan.expand_tasks(full_task)
         PhysicalPlan.infer_schema(full_task)
         PhysicalPlan.cleanup_output_column_names(full_task)
         stages = list(reversed(list(split_into_stages(full_task))))
