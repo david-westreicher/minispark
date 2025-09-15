@@ -13,6 +13,7 @@ from mini_spark.plan import PhysicalPlan
 pytest.skip("Skipping this test file", allow_module_level=True)
 
 ENGINES = [PythonExecutionEngine]
+FLOAT = ColumnType.FLOAT
 INT = ColumnType.INTEGER
 STR = ColumnType.STRING
 
@@ -35,21 +36,21 @@ USERS = [
 ]
 
 ORDERS = [
-    (1, 1, "Laptop", 1, 1200, "2025-01-01"),
-    (2, 2, "Mouse", 2, 25, "2025-01-05"),
-    (3, 3, "Keyboard", 1, 45, "2025-02-10"),
-    (4, 1, "Monitor", 2, 300, "2025-03-15"),
-    (5, 4, "Laptop", 1, 1100, "2025-03-20"),
-    (6, 5, "Mouse", 1, 30, "2025-04-01"),
-    (7, 6, "Keyboard", 2, 50, "2025-04-10"),
-    (8, 7, "Monitor", 1, 280, "2025-05-05"),
-    (9, 8, "Laptop", 1, 1300, "2025-05-10"),
-    (10, 9, "Mouse", 3, 27, "2025-06-01"),
-    (11, 10, "Keyboard", 1, 40, "2025-06-15"),
-    (12, 11, "Monitor", 2, 290, "2025-07-01"),
-    (13, 12, "Laptop", 1, 1250, "2025-07-10"),
-    (14, 13, "Mouse", 2, 26, "2025-07-15"),
-    (15, 14, "Keyboard", 1, 42, "2025-08-01"),
+    (1, 1, "Laptop", 1, 1200.0, "2025-01-01"),
+    (2, 2, "Mouse", 2, 25.0, "2025-01-05"),
+    (3, 3, "Keyboard", 1, 45.0, "2025-02-10"),
+    (4, 1, "Monitor", 2, 300.0, "2025-03-15"),
+    (5, 4, "Laptop", 1, 1100.0, "2025-03-20"),
+    (6, 5, "Mouse", 1, 30.0, "2025-04-01"),
+    (7, 6, "Keyboard", 2, 50.0, "2025-04-10"),
+    (8, 7, "Monitor", 1, 280.0, "2025-05-05"),
+    (9, 8, "Laptop", 1, 1300.0, "2025-05-10"),
+    (10, 9, "Mouse", 3, 27.0, "2025-06-01"),
+    (11, 10, "Keyboard", 1, 40.0, "2025-06-15"),
+    (12, 11, "Monitor", 2, 290.0, "2025-07-01"),
+    (13, 12, "Laptop", 1, 1250.0, "2025-07-10"),
+    (14, 13, "Mouse", 2, 26.0, "2025-07-15"),
+    (15, 14, "Keyboard", 1, 42.0, "2025-08-01"),
 ]
 
 
@@ -61,6 +62,9 @@ def assert_rows_equal(rows_0: list[Row], rows_1: list[Row]):
         assert r0.keys() == r1.keys(), f"Row keys mismatch: {r0.keys()} != {r1.keys()}"
         for key in r0:
             assert r0[key] == r1[key], f"Row value mismatch for key '{key}': {r0[key]} != {r1[key]}"
+            assert type(r0[key]) is type(r1[key]), (
+                f"Row value type mismatch for key '{key}': {type(r0[key])} != {type(r1[key])}"
+            )
 
 
 @pytest.fixture(autouse=True)
@@ -77,7 +81,7 @@ def test_data_orders(tmp_path: Path):
         ("user_id", INT),
         ("product", STR),
         ("quantity", INT),
-        ("price", INT),
+        ("price", FLOAT),
         ("order_date", STR),
     ]
     column_data = tuple(map(list, zip(*ORDERS, strict=True)))
@@ -185,13 +189,13 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
             to_rows(
                 ("order_id", "user_id", "product", "quantity", "price", "order_date"),
                 [
-                    (1, 1, "Laptop", 1, 1200, "2025-01-01"),
-                    (4, 1, "Monitor", 2, 300, "2025-03-15"),
-                    (5, 4, "Laptop", 1, 1100, "2025-03-20"),
-                    (8, 7, "Monitor", 1, 280, "2025-05-05"),
-                    (9, 8, "Laptop", 1, 1300, "2025-05-10"),
-                    (12, 11, "Monitor", 2, 290, "2025-07-01"),
-                    (13, 12, "Laptop", 1, 1250, "2025-07-10"),
+                    (1, 1, "Laptop", 1, 1200.0, "2025-01-01"),
+                    (4, 1, "Monitor", 2, 300.0, "2025-03-15"),
+                    (5, 4, "Laptop", 1, 1100.0, "2025-03-20"),
+                    (8, 7, "Monitor", 1, 280.0, "2025-05-05"),
+                    (9, 8, "Laptop", 1, 1300.0, "2025-05-10"),
+                    (12, 11, "Monitor", 2, 290.0, "2025-07-01"),
+                    (13, 12, "Laptop", 1, 1250.0, "2025-07-10"),
                 ],
             ),
         ),
@@ -200,21 +204,21 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
             to_rows(
                 ("product", "total_value"),
                 [
-                    ("Laptop", 1200),
-                    ("Mouse", 50),
-                    ("Keyboard", 45),
-                    ("Monitor", 600),
-                    ("Laptop", 1100),
-                    ("Mouse", 30),
-                    ("Keyboard", 100),
-                    ("Monitor", 280),
-                    ("Laptop", 1300),
-                    ("Mouse", 81),
-                    ("Keyboard", 40),
-                    ("Monitor", 580),
-                    ("Laptop", 1250),
-                    ("Mouse", 52),
-                    ("Keyboard", 42),
+                    ("Laptop", 1200.0),
+                    ("Mouse", 50.0),
+                    ("Keyboard", 45.0),
+                    ("Monitor", 600.0),
+                    ("Laptop", 1100.0),
+                    ("Mouse", 30.0),
+                    ("Keyboard", 100.0),
+                    ("Monitor", 280.0),
+                    ("Laptop", 1300.0),
+                    ("Mouse", 81.0),
+                    ("Keyboard", 40.0),
+                    ("Monitor", 580.0),
+                    ("Laptop", 1250.0),
+                    ("Mouse", 52.0),
+                    ("Keyboard", 42.0),
                 ],
             ),
         ),
@@ -223,13 +227,13 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
             to_rows(
                 ("order_id", "user_id", "product", "quantity", "price", "order_date"),
                 [
-                    (4, 1, "Monitor", 2, 300, "2025-03-15"),
-                    (5, 4, "Laptop", 1, 1100, "2025-03-20"),
-                    (6, 5, "Mouse", 1, 30, "2025-04-01"),
-                    (7, 6, "Keyboard", 2, 50, "2025-04-10"),
-                    (8, 7, "Monitor", 1, 280, "2025-05-05"),
-                    (9, 8, "Laptop", 1, 1300, "2025-05-10"),
-                    (10, 9, "Mouse", 3, 27, "2025-06-01"),
+                    (4, 1, "Monitor", 2, 300.0, "2025-03-15"),
+                    (5, 4, "Laptop", 1, 1100.0, "2025-03-20"),
+                    (6, 5, "Mouse", 1, 30.0, "2025-04-01"),
+                    (7, 6, "Keyboard", 2, 50.0, "2025-04-10"),
+                    (8, 7, "Monitor", 1, 280.0, "2025-05-05"),
+                    (9, 8, "Laptop", 1, 1300.0, "2025-05-10"),
+                    (10, 9, "Mouse", 3, 27.0, "2025-06-01"),
                 ],
             ),
         ),
@@ -238,10 +242,10 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
             to_rows(
                 ("order_id", "user_id", "product", "quantity", "price", "order_date"),
                 [
-                    (1, 1, "Laptop", 1, 1200, "2025-01-01"),
-                    (5, 4, "Laptop", 1, 1100, "2025-03-20"),
-                    (9, 8, "Laptop", 1, 1300, "2025-05-10"),
-                    (13, 12, "Laptop", 1, 1250, "2025-07-10"),
+                    (1, 1, "Laptop", 1, 1200.0, "2025-01-01"),
+                    (5, 4, "Laptop", 1, 1100.0, "2025-03-20"),
+                    (9, 8, "Laptop", 1, 1300.0, "2025-05-10"),
+                    (13, 12, "Laptop", 1, 1250.0, "2025-07-10"),
                 ],
             ),
         ),
@@ -261,20 +265,20 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
             to_rows(
                 ("user_id", "total_spent"),
                 [
-                    (1, 1200 + 600),  # Laptop + Monitor
-                    (2, 50),
-                    (3, 45),
-                    (4, 1100),
-                    (5, 30),
-                    (6, 100),
-                    (7, 280),
-                    (8, 1300),
-                    (9, 81),
-                    (10, 40),
-                    (11, 580),
-                    (12, 1250),
-                    (13, 52),
-                    (14, 42),
+                    (1, 1200.0 + 600.0),  # Laptop + Monitor
+                    (2, 50.0),
+                    (3, 45.0),
+                    (4, 1100.0),
+                    (5, 30.0),
+                    (6, 100.0),
+                    (7, 280.0),
+                    (8, 1300.0),
+                    (9, 81.0),
+                    (10, 40.0),
+                    (11, 580.0),
+                    (12, 1250.0),
+                    (13, 52.0),
+                    (14, 42.0),
                 ],
             ),
         ),
@@ -351,20 +355,20 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
             to_rows(
                 ("first_name", "spent"),
                 [
-                    ("Alice", 1200 + 600),
-                    ("Bob", 50),
-                    ("Charlie", 45),
-                    ("David", 1100),
-                    ("Eva", 30),
-                    ("Frank", 100),
-                    ("Grace", 280),
-                    ("Hank", 1300),
-                    ("Ivy", 81),
-                    ("Jack", 40),
-                    ("Kate", 580),
-                    ("Leo", 1250),
-                    ("Mia", 52),
-                    ("Nick", 42),
+                    ("Alice", 1200.0 + 600.0),
+                    ("Bob", 50.0),
+                    ("Charlie", 45.0),
+                    ("David", 1100.0),
+                    ("Eva", 30.0),
+                    ("Frank", 100.0),
+                    ("Grace", 280.0),
+                    ("Hank", 1300.0),
+                    ("Ivy", 81.0),
+                    ("Jack", 40.0),
+                    ("Kate", 580.0),
+                    ("Leo", 1250.0),
+                    ("Mia", 52.0),
+                    ("Nick", 42.0),
                 ],
             ),
         ),
@@ -374,13 +378,13 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
             to_rows(
                 ("first_name", "product", "price"),
                 [
-                    ("Alice", "Laptop", 1200),
-                    ("Alice", "Monitor", 300),
-                    ("David", "Laptop", 1100),
-                    ("Grace", "Monitor", 280),
-                    ("Hank", "Laptop", 1300),
-                    ("Kate", "Monitor", 290),
-                    ("Leo", "Laptop", 1250),
+                    ("Alice", "Laptop", 1200.0),
+                    ("Alice", "Monitor", 300.0),
+                    ("David", "Laptop", 1100.0),
+                    ("Grace", "Monitor", 280.0),
+                    ("Hank", "Laptop", 1300.0),
+                    ("Kate", "Monitor", 290.0),
+                    ("Leo", "Laptop", 1250.0),
                 ],
             ),
         ),
@@ -406,10 +410,10 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
             to_rows(
                 ("product", "total_quantity", "max_price"),
                 [
-                    ("Laptop", 4, 1300),
-                    ("Mouse", 8, 30),
-                    ("Keyboard", 5, 50),
-                    ("Monitor", 5, 300),
+                    ("Laptop", 4, 1300.0),
+                    ("Mouse", 8, 30.0),
+                    ("Keyboard", 5, 50.0),
+                    ("Monitor", 5, 300.0),
                 ],
             ),
         ),
@@ -420,8 +424,8 @@ def to_rows(schema: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[Row]:
             to_rows(
                 ("country", "orders_count", "total_sales"),
                 [
-                    ("USA", 7, 1 * 1200 + 1 * 45 + 2 * 300 + 2 * 50 + 1 * 1300 + 1 * 40 + 1 * 1250),
-                    ("UK", 4, 1 * 1100 + 1 * 280 + 2 * 290 + 1 * 42),
+                    ("USA", 7, float(1 * 1200 + 1 * 45 + 2 * 300 + 2 * 50 + 1 * 1300 + 1 * 40 + 1 * 1250)),
+                    ("UK", 4, float(1 * 1100 + 1 * 280 + 2 * 290 + 1 * 42)),
                     # ("Canada", 4, 213) ignored total_sales <= 500
                 ],
             ),

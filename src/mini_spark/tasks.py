@@ -14,6 +14,7 @@ from .constants import (
     SHUFFLE_PARTITIONS,
     Columns,
     ColumnTypePython,
+    NumericColumnTypes,
     Schema,
 )
 from .io import BlockFile
@@ -265,7 +266,7 @@ class BroadcastHashJoinTask(ProducerTask):
 class AggregateTask(ConsumerTask):
     group_by_column: Col
     agg_columns: list[AggCol]
-    per_column_aggregator: list[dict[Any, int]] = field(default_factory=list, repr=False)
+    per_column_aggregator: list[dict[Any, Any]] = field(default_factory=list, repr=False)
     before_shuffle: bool = True
 
     @trace("AggregateTask")
@@ -299,15 +300,15 @@ class AggregateTask(ConsumerTask):
         ):
             if agg_col.type == "sum":
                 for group, expr in zip(group_column, agg_expr_col, strict=True):
-                    assert type(expr) is int
+                    assert type(expr) in NumericColumnTypes
                     counter[group] = counter.get(group, 0) + expr
             if agg_col.type == "min":
                 for group, expr in zip(group_column, agg_expr_col, strict=True):
-                    assert type(expr) is int
+                    assert type(expr) in NumericColumnTypes
                     counter[group] = min(counter.get(group, MAX_INT), expr)
             if agg_col.type == "max":
                 for group, expr in zip(group_column, agg_expr_col, strict=True):
-                    assert type(expr) is int
+                    assert type(expr) in NumericColumnTypes
                     counter[group] = max(counter.get(group, MIN_INT), expr)
 
     def validate_schema(self) -> Schema:

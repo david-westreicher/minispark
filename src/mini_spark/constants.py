@@ -69,6 +69,7 @@ class ColumnType(Enum):
 
 
 ColumnTypePython = int | float | str
+NumericColumnTypes = {int, float}
 Row = dict[str, ColumnTypePython]
 Columns = tuple[list[ColumnTypePython], ...]
 Schema = list[tuple[str, ColumnType]]

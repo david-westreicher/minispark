@@ -10,7 +10,7 @@ from tabulate import tabulate
 from .constants import DEBUG_EXECUTION
 from .io import BlockFile
 from .jobs import Job, JobResult, JoinJob, LoadShuffleFilesJob, OutputFile, ScanJob
-from .sql import BinaryOperatorColumn, Col
+from .sql import AggCol, BinaryOperatorColumn, Col
 from .tasks import (
     AggregateTask,
     BroadcastHashJoinTask,
@@ -198,6 +198,7 @@ class PhysicalPlan:
             task.parent_task = WriteToShufflePartitions(task.parent_task, key_column=task.group_by_column)
             task.parent_task = LoadShuffleFilesTask(task.parent_task)
             task.before_shuffle = False
+            task.agg_columns = [AggCol(col.type, Col(col.name)) for col in task.agg_columns]
             PhysicalPlan.expand_tasks(original_parent)
             return
         PhysicalPlan.expand_tasks(task.parent_task)
