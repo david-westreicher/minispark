@@ -6,9 +6,8 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
 
-from mini_spark.utils import trace, trace_yield
-
 from .constants import ROWS_PER_BLOCK, Columns, ColumnType, Row, Schema
+from .utils import trace, trace_yield
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

@@ -12,9 +12,8 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from mini_spark.constants import WORKER_POOL_PROCESSES
-
 from .codegen import compile_plan
+from .constants import WORKER_POOL_PROCESSES
 from .io import BlockFile
 from .jobs import Job, JobResult, OutputFile
 from .plan import PhysicalPlan

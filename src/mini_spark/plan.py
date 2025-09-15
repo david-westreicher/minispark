@@ -7,8 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 from tabulate import tabulate
 
-from mini_spark.constants import DEBUG_EXECUTION
-
+from .constants import DEBUG_EXECUTION
 from .io import BlockFile
 from .jobs import Job, JobResult, JoinJob, LoadShuffleFilesJob, OutputFile, ScanJob
 from .sql import BinaryOperatorColumn, Col

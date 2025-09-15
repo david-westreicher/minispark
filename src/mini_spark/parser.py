@@ -6,11 +6,10 @@ from parsimonious.exceptions import VisitationError
 from parsimonious.grammar import Grammar
 from parsimonious.nodes import Node, NodeVisitor
 
-from mini_spark.constants import ColumnTypePython
-from mini_spark.sql import AggCol, Col, Lit
-from mini_spark.sql import Functions as F  # noqa: N817
-
+from .constants import ColumnTypePython
 from .dataframe import DataFrame
+from .sql import AggCol, Col, Lit
+from .sql import Functions as F  # noqa: N817
 
 sql_grammar = Grammar(
     r"""
