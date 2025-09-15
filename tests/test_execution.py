@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -8,11 +9,14 @@ from mini_spark.io import BlockFile
 from mini_spark.sql import Col
 from mini_spark.sql import Functions as F  # noqa: N817
 
+if TYPE_CHECKING:
+    from mini_spark.constants import Row
+
 
 @pytest.fixture
 def test_data(tmp_path: Path) -> str:
     test_file = tmp_path / "fruits.bin"
-    test_data = [
+    test_data: list[Row] = [
         {"fruit": "apple", "quantity": 3, "color": "red"},
         {"fruit": "banana", "quantity": 5, "color": "yellow"},
         {"fruit": "orange", "quantity": 2, "color": "orange"},

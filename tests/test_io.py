@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from mini_spark.constants import ColumnType
+from mini_spark.constants import ColumnType, Row
 from mini_spark.io import (
     BlockFile,
     _deserialize_schema,
@@ -13,6 +13,7 @@ def test_serialize_deserialize_schema(temporary_file: Path):
     schema = [
         ("int_col", ColumnType.INTEGER),
         ("str_col", ColumnType.STRING),
+        ("float_col", ColumnType.FLOAT),
     ]
 
     # act
@@ -26,9 +27,9 @@ def test_serialize_deserialize_schema(temporary_file: Path):
 
 def test_serialize_deserialize_data(temporary_file: Path):
     # arrange
-    rows = [
-        {"int_col": 1, "str_col": "1"},
-        {"int_col": 2, "str_col": "2"},
+    rows: list[Row] = [
+        {"int_col": 1, "str_col": "1", "float_col": 1.0},
+        {"int_col": 2, "str_col": "2", "float_col": 2.0},
     ]
 
     # act
@@ -44,13 +45,13 @@ def test_serialize_deserialize_data(temporary_file: Path):
 
 def test_serialize_append_deserialize_data(temporary_file: Path):
     # arrange
-    rows = [
-        {"int_col": 1, "str_col": "1"},
-        {"int_col": 2, "str_col": "2"},
+    rows: list[Row] = [
+        {"int_col": 1, "str_col": "1", "float_col": 1.0},
+        {"int_col": 2, "str_col": "2", "float_col": 2.0},
     ]
-    new_rows = [
-        {"int_col": 3, "str_col": "3"},
-        {"int_col": 4, "str_col": "4"},
+    new_rows: list[Row] = [
+        {"int_col": 3, "str_col": "3", "float_col": 3.0},
+        {"int_col": 4, "str_col": "4", "float_col": 4.0},
     ]
 
     # act
@@ -61,7 +62,11 @@ def test_serialize_append_deserialize_data(temporary_file: Path):
     all_data = list(block_file.read_data_rows())
 
     # assert
-    assert deserialized_schema == [("int_col", ColumnType.INTEGER), ("str_col", ColumnType.STRING)]
+    assert deserialized_schema == [
+        ("int_col", ColumnType.INTEGER),
+        ("str_col", ColumnType.STRING),
+        ("float_col", ColumnType.FLOAT),
+    ]
     assert all_data == rows + new_rows
 
 

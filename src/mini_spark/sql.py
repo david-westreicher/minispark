@@ -227,6 +227,10 @@ BINOP_SYMBOLS: dict[Callable[[Col, Col], Col], str] = {
 UNOP_SYMBOLS: dict[Callable[[Col], Col], str] = {
     operator.invert: "not",
 }
+COMPATIBLE_TYPE_CONVERSION = {
+    (ColumnType.INTEGER, ColumnType.FLOAT): ColumnType.FLOAT,
+    (ColumnType.FLOAT, ColumnType.INTEGER): ColumnType.FLOAT,
+}
 
 
 @dataclass
@@ -266,6 +270,8 @@ class BinaryOperatorColumn(Col):
     def infer_type(self, schema: Schema) -> ColumnType:
         left_type = self.left_side.infer_type(schema)
         right_type = self.right_side.infer_type(schema)
+        if (left_type, right_type) in COMPATIBLE_TYPE_CONVERSION:
+            return COMPATIBLE_TYPE_CONVERSION[(left_type, right_type)]
         if left_type != right_type:
             raise TypeError(
                 f"Type mismatch in binary operation: {left_type} {self.operator} {right_type}",
@@ -361,8 +367,8 @@ class AggCol(Col):
         self.name = f"{agg_type}_{original_col.name}"
         super().__init__(self.name)
 
-    def infer_type(self, schema: Schema) -> ColumnType:  # noqa: ARG002
-        return ColumnType.INTEGER
+    def infer_type(self, schema: Schema) -> ColumnType:
+        return self.original_col.infer_type(schema)
 
     def schema_executor(self, schema: Schema) -> Col:
         return self.original_col.schema_executor(schema)
