@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from contextlib import ExitStack
+import struct
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
@@ -71,13 +71,19 @@ def _generate_data_blocks_for_columns(
         block_bytes = list(to_unsigned_int(block_rows))
         for col, (_, col_type) in zip(columns, schema, strict=True):
             block_data = col[offset : offset + ROWS_PER_BLOCK]
-            col_data = []
+            col_data: list[int] = []
             if col_type == ColumnType.INTEGER:
                 for val in block_data:
+                    assert type(val) is int
                     col_data.extend(val.to_bytes(4, byteorder="little", signed=True))
-            elif col_type == ColumnType.STRING:
-                col_data.extend(len(val) & 0xFF for val in block_data)
+            elif col_type == ColumnType.FLOAT:
                 for val in block_data:
+                    assert type(val) is float
+                    col_data.extend(struct.pack("<f", val))
+            elif col_type == ColumnType.STRING:
+                col_data.extend(len(str(val)) & 0xFF for val in block_data)
+                for val in block_data:
+                    assert type(val) is str
                     col_data.extend(val.encode("utf-8"))
             block_bytes.extend(to_unsigned_int(len(col_data)))
             block_bytes.extend(col_data)
@@ -89,7 +95,6 @@ def _deserialize_block_column(
     column_name: str,
     schema: Schema,
     block_rows: int,
-    chunk_size: float = float("inf"),  # TODO(david): not needed anymore
 ) -> Iterable[list[Any]]:
     # skip to correct column
     for schema_col_name, _ in schema:
@@ -107,18 +112,17 @@ def _deserialize_block_column(
             int_value = int.from_bytes(f.read(4), byteorder="little", signed=True)
             curr_chunk.append(int_value)
             rows_read += 1
-            if len(curr_chunk) > chunk_size:
-                yield curr_chunk
-                curr_chunk = []
+    elif col_type == ColumnType.FLOAT:
+        while rows_read < block_rows:
+            float_value = struct.unpack("<f", f.read(4))[0]
+            curr_chunk.append(float_value)
+            rows_read += 1
     elif col_type == ColumnType.STRING:
         str_lengths = [int(f.read(1)[0]) for _ in range(block_rows)]
         while rows_read < block_rows:
             str_value = f.read(str_lengths[rows_read]).decode("utf-8")
             curr_chunk.append(str_value)
             rows_read += 1
-            if len(curr_chunk) > chunk_size:
-                yield curr_chunk
-                curr_chunk = []
     else:
         raise ValueError(f"Unsupported column type {col_type}")
     if curr_chunk:
@@ -263,36 +267,6 @@ class BlockFile:
             for block_start in self.block_starts:
                 f.seek(block_start)
                 yield _deserialize_block(f, schema)
-
-    def create_block_reader(
-        self,
-        block_start: int,
-        row_buffer_size: int,
-    ) -> Iterable[Row]:
-        schema = self.file_schema
-        with self.file.open("rb") as f:
-            f.seek(block_start)
-            block_rows = read_unsigned_int(f)
-        with ExitStack() as stack:
-            file_handles = [stack.enter_context(self.file.open("rb")) for _ in schema]
-            for f in file_handles:
-                f.seek(block_start)
-                block_rows = read_unsigned_int(f)
-            column_readers = [
-                _deserialize_block_column(
-                    f,
-                    col_name,
-                    schema,
-                    block_rows,
-                    chunk_size=row_buffer_size,
-                )
-                for f, (col_name, _) in zip(file_handles, schema, strict=True)
-            ]
-            for row_tuple_chunk in zip(*column_readers, strict=True):
-                yield from [
-                    {col_name: row_tuple[col_idx] for col_idx, (col_name, _) in enumerate(schema)}
-                    for row_tuple in zip(*row_tuple_chunk, strict=True)
-                ]
 
     def merge_files(self, files: list[Path]) -> Self:
         self.schema = BlockFile(files[0]).file_schema

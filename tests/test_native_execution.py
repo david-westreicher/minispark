@@ -1,15 +1,19 @@
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mini_spark.dataframe import DataFrame
 from mini_spark.execution import ThreadEngine
 from mini_spark.io import BlockFile
 from mini_spark.sql import Col
 
+if TYPE_CHECKING:
+    from mini_spark.constants import Row
+
 
 def test_overflow(tmp_path: Path):
     test_file = tmp_path / "fruits.bin"
-    test_data = [
+    test_data: list[Row] = [
         {"num1": 2**31 - 1, "num2": 2**31 - 1},
     ]
     BlockFile(test_file).write_rows(test_data)

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 ROWS_PER_BLOCK = 2 * 1024 * 1024
 SHUFFLE_PARTITIONS = 10
@@ -18,6 +17,7 @@ MIN_INT = -(2**31)
 class ColumnType(Enum):
     INTEGER = (0, int)
     STRING = (1, str)
+    FLOAT = (2, float)
     UNKNOWN = (255, type(None))
 
     def __init__(self, value: int, py_type: type) -> None:
@@ -32,11 +32,13 @@ class ColumnType(Enum):
         raise NotImplementedError(ordinal)
 
     @staticmethod
-    def of(value: int | str) -> ColumnType:
+    def of(value: ColumnTypePython) -> ColumnType:
         if type(value) is int:
             return ColumnType.INTEGER
         if type(value) is str:
             return ColumnType.STRING
+        if type(value) is float:
+            return ColumnType.FLOAT
         return ColumnType.UNKNOWN
 
     @property
@@ -45,6 +47,8 @@ class ColumnType(Enum):
             return "i32"
         if self == ColumnType.STRING:
             return "[]const u8"
+        if self == ColumnType.FLOAT:
+            return "f32"
         raise NotImplementedError(self)
 
     @property
@@ -53,6 +57,8 @@ class ColumnType(Enum):
             return "I32"
         if self == ColumnType.STRING:
             return "Str"
+        if self == ColumnType.FLOAT:
+            return "F32"
         raise NotImplementedError(self)
 
     def __str__(self) -> str:
@@ -62,7 +68,7 @@ class ColumnType(Enum):
         return self.__str__()
 
 
-ColumnTypePython = int | str
-Row = dict[str, Any]
-Columns = tuple[list[Any], ...]
+ColumnTypePython = int | float | str
+Row = dict[str, ColumnTypePython]
+Columns = tuple[list[ColumnTypePython], ...]
 Schema = list[tuple[str, ColumnType]]

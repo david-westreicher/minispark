@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from mini_spark.constants import ColumnType
+from mini_spark.constants import ColumnType, Row
 from mini_spark.io import BlockFile
 from mini_spark.plan import PhysicalPlan
 from mini_spark.sql import Col, Lit
@@ -23,7 +23,7 @@ from mini_spark.tasks import (
 @pytest.fixture
 def test_data_file(tmp_path: Path) -> str:
     test_file = tmp_path / "fruits.bin"
-    test_data = [
+    test_data: list[Row] = [
         {"fruit": "apple", "quantity": 3, "color": "red"},
         {"fruit": "banana", "quantity": 5, "color": "yellow"},
         {"fruit": "orange", "quantity": 2, "color": "orange"},
