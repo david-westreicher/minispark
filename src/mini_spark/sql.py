@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import operator
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -62,9 +63,8 @@ class Col:
     def __hash__(self) -> int:
         return hash((self.__class__, self.name))
 
-    # TODO(david): can be removed after refactoring join
-    def execute(self, row: dict[str, ColumnTypePython]) -> ColumnTypePython:
-        return row[self.name]
+    def like(self, pattern: str) -> Col:
+        return LikeColumn(self, pattern)
 
     def execute_row(self, row: tuple[ColumnTypePython, ...]) -> ColumnTypePython:
         raise NotImplementedError
@@ -116,9 +116,6 @@ class SchemaCol(Col):
     def __eq__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
         return super().__eq__(other)
 
-    def execute(self, row: dict[str, Any]) -> Any:  # noqa: ANN401
-        raise NotImplementedError
-
     def execute_row(self, row: tuple[Any, ...]) -> Any:  # noqa: ANN401
         return row[self.col_pos]
 
@@ -139,9 +136,6 @@ class AliasColumn(Col):
         yield self
         yield from self.original_col.all_nested_columns
 
-    def execute(self, row: dict[str, Any]) -> Any:  # noqa: ANN401
-        return self.original_col.execute(row)
-
     def execute_row(self, row: tuple[Any, ...]) -> Any:  # noqa: ANN401
         return self.original_col.execute_row(row)
 
@@ -159,6 +153,55 @@ class AliasColumn(Col):
 
     def zig_code_representation(self, schema: Schema) -> str:
         return self.original_col.zig_code_representation(schema)
+
+
+@dataclass
+class LikeColumn(Col):
+    original_col: Col
+    pattern: str
+    regex: str = ""
+
+    def __init__(self, original_col: Col, pattern: str) -> None:
+        super().__init__(f"{original_col.name}_like_{pattern}")
+        self.original_col = original_col
+        self.pattern = pattern
+        self.regex = self.generate_regex(pattern)
+
+    def generate_regex(self, pattern: str) -> str:
+        return "^" + re.escape(pattern).replace("%", ".*").replace("_", ".") + "$"
+
+    def __eq__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
+        return super().__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash((self.__class__, hash(self.original_col), self.pattern))
+
+    @property
+    def all_nested_columns(self) -> Iterable[Col]:
+        yield self
+        yield from self.original_col.all_nested_columns
+
+    def execute_row(self, row: tuple[Any, ...]) -> Any:  # noqa: ANN401
+        left_side = self.original_col.execute_row(row)
+        return re.match(self.regex, str(left_side)) is not None
+
+    def __str__(self) -> str:
+        return f"({self.original_col}) LIKE '{self.pattern}'"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def infer_type(self, schema: Schema) -> ColumnType:
+        original_type = self.original_col.infer_type(schema)
+        assert original_type == ColumnType.STRING, "LIKE operator can only be applied to string columns"
+        return ColumnType.STRING
+
+    def schema_executor(self, schema: Schema) -> Col:
+        return LikeColumn(self.original_col.schema_executor(schema), self.pattern)
+
+    def zig_code_representation(self, schema: Schema) -> str:
+        left_side = self.original_col.zig_code_representation(schema)
+        return f"try re.match({left_side})"
 
 
 BINOP_SYMBOLS: dict[Callable[[Col, Col], Col], str] = {
@@ -201,9 +244,6 @@ class BinaryOperatorColumn(Col):
         if not isinstance(self.right_side, Col):
             self.right_side = Lit(self.right_side)
         self.name = f"{self.left_side.name}_{self.operator.__name__}_{self.right_side.name}"
-
-    def execute(self, row: dict[str, Any]) -> Any:  # noqa: ANN401
-        return self.operator(self.left_side.execute(row), self.right_side.execute(row))
 
     def execute_row(self, row: tuple[Any, ...]) -> Any:  # noqa: ANN401
         return self.operator(
@@ -272,9 +312,6 @@ class Lit(Col):
     def __post_init__(self) -> None:
         self.name = f"lit_{self.value}"
 
-    def execute(self, row: dict[str, Any]) -> Any:  # noqa: ANN401, ARG002
-        return self.value
-
     def execute_row(self, row: tuple[Any, ...]) -> Any:  # noqa: ANN401, ARG002
         return self.value
 
@@ -318,10 +355,10 @@ class AggCol(Col):
         return ColumnType.INTEGER
 
     def schema_executor(self, schema: Schema) -> Col:
-        return self.original_col.schema_executor(schema) if self.original_col else self
+        return self.original_col.schema_executor(schema)
 
     def execute_row(self, row: tuple[ColumnTypePython, ...]) -> ColumnTypePython:
-        return self.original_col.execute_row(row) if self.original_col else 0
+        return self.original_col.execute_row(row)
 
     def alias(self, name: str) -> AggCol:
         self.name = name
