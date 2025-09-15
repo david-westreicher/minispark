@@ -4,13 +4,13 @@ from typing import Any
 import pytest
 
 from mini_spark.constants import ColumnType, Row
-from mini_spark.execution import ExecutionEngine, PythonExecutionEngine, ThreadEngine
+from mini_spark.execution import ExecutionEngine, PythonExecutionEngine
 from mini_spark.io import BlockFile
 from mini_spark.parser import parse_sql
 
 pytest.skip("Skipping this test file", allow_module_level=True)
 
-ENGINES = [PythonExecutionEngine, ThreadEngine]
+ENGINES = [PythonExecutionEngine]
 INT = ColumnType.INTEGER
 STR = ColumnType.STRING
 

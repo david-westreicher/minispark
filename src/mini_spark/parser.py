@@ -35,7 +35,8 @@ sql_grammar = Grammar(
     or_expr          = and_expr (ws "OR" ws and_expr)*
     and_expr         = not_expr (ws "AND" ws not_expr)*
     not_expr         = ("NOT" ws)? predicate
-    predicate        = comparison / parenthised_condition / string_literal
+    predicate        = comparison / parenthised_condition / string_literal / like
+    like             = expr ws "LIKE" ws string_literal
     parenthised_condition = "(" ws? condition ws? ")"
     comparison       = expr ws? comparator ws? expr
 
@@ -90,6 +91,7 @@ ComparisonType = tuple[Col, Any, ComparatorType, Any, Col | ColumnTypePython]
 ParenthisedConditionType = tuple[Any, Any, Col, Any, Any]
 AtomType = tuple[Col]
 TableReferenceType = tuple[DataFrame, list[str] | Node]
+LikeType = tuple[Col, Any, Any, Any, str]
 
 
 class SemanticError(Exception):
@@ -144,7 +146,7 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
                     f"{invalid_agg_cols}"
                 )
             return df.group_by(*group_by_cols).agg(*agg_cols).select(*[Col(col.name) for col in select_list])
-        return load_table.select(*select_list)
+        return df.select(*select_list)
 
     def visit_select_list(self, node: Node, visited_children: SelectList) -> list[Col]:  # noqa: ARG002
         selections = [visited_children[0]]
@@ -255,6 +257,10 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
 
     def visit_predicate(self, node: Node, visited_children: PredicateType) -> Col:  # noqa: ARG002
         return visited_children[0]
+
+    def visit_like(self, node: Node, visited_children: LikeType) -> Col:  # noqa: ARG002
+        col, _, _, _, pattern = visited_children
+        return col.like(pattern)
 
     def visit_comparison(self, node: Node, visited_children: ComparisonType) -> Col:  # noqa: ARG002
         left, _, comparator, _, right = visited_children

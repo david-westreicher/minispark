@@ -18,7 +18,7 @@ from .constants import (
 )
 from .io import BlockFile
 from .jobs import Job, JoinJob, LoadShuffleFilesJob, OutputFile, ScanJob
-from .sql import AggCol, BinaryOperatorColumn, Col
+from .sql import AggCol, BinaryOperatorColumn, Col, LikeColumn
 from .utils import nice_schema, trace, trace_yield
 
 if TYPE_CHECKING:
@@ -161,7 +161,7 @@ class FilterTask(ConsumerTask):
     condition: Col
 
     def __post_init__(self) -> None:
-        assert type(self.condition) is BinaryOperatorColumn, type(self.condition)
+        assert type(self.condition) in {BinaryOperatorColumn, LikeColumn}, type(self.condition)
 
     @trace("FilterTask")
     def execute(self, chunk: Columns | None, *, is_last: bool) -> tuple[Columns | None, bool]:
