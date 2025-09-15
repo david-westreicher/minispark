@@ -48,7 +48,12 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block) ![]u8 {
 // ###### Condition columns
 //{% for col in plan.condition_columns %}
 pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output: []bool) void {
+    //{%- if not col.like_columns %}
     _ = allocator;
+    //{%- endif %}
+    //{%- for col in col.like_columns %} // TODO: https://github.com/tiehuis/zig-regex/pull/39
+    var re = try std.regex.compile(allocator, "{{col.regex}}");
+    //{%- endfor %}
     //{%- for ref in col.references %}
     const col_{{ref.name}} = block.cols[{{ref.pos}}].{{ref.struct_type}};
     //{%- endfor %}

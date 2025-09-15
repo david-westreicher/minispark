@@ -6,11 +6,10 @@ from parsimonious.exceptions import VisitationError
 from parsimonious.grammar import Grammar
 from parsimonious.nodes import Node, NodeVisitor
 
-from mini_spark.constants import ColumnTypePython
-from mini_spark.sql import AggCol, Col, Lit
-from mini_spark.sql import Functions as F  # noqa: N817
-
+from .constants import ColumnTypePython
 from .dataframe import DataFrame
+from .sql import AggCol, Col, Lit
+from .sql import Functions as F  # noqa: N817
 
 sql_grammar = Grammar(
     r"""
@@ -28,7 +27,8 @@ sql_grammar = Grammar(
     join_clause      = join_type ws table_reference ws "ON" ws condition
     join_type        = "JOIN" / ("LEFT" ws "JOIN") / ("RIGHT" ws "JOIN") / ("INNER" ws "JOIN") / ("FULL" ws "JOIN")
     where_clause     = "WHERE" ws condition
-    group_by_clause  = "GROUP" ws "BY" ws column_name (ws? "," ws? column_name)*
+    group_by_clause  = "GROUP" ws "BY" ws column_name (ws? "," ws? column_name)* (ws having_clause)?
+    having_clause    = "HAVING" ws condition
 
     # --- Operator precedence ---
     condition        = or_expr
@@ -48,7 +48,9 @@ sql_grammar = Grammar(
     mul_expr         = atom (ws? mul_op ws? atom)*
     add_op           = "+" / "-"
     mul_op           = "*" / "/"
-    atom             = number / column_name / parenthised_expr / string_literal
+    atom             = function_call / number / column_name / parenthised_expr / string_literal
+    function_call    = identifier ws? "(" ws? argument_list? ws? ")"
+    argument_list    = expr (ws? "," ws? expr)*
     parenthised_expr = "(" ws? expr ws? ")"
 
     # --- Terminals ---
@@ -134,7 +136,7 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
 
         # add groupby
         if type(group_by_clause) is list:
-            _, group_by_cols = group_by_clause[0]
+            _, (group_by_cols, having) = group_by_clause[0]
             group_by_col_names = {col.name for col in group_by_cols}
             agg_cols = [col for col in select_list if type(col) is AggCol]
             invalid_agg_cols = [
@@ -145,7 +147,15 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
                     "All selected columns must be aggregate functions or part of the key when using GROUP BY:\n"
                     f"{invalid_agg_cols}"
                 )
-            return df.group_by(*group_by_cols).agg(*agg_cols).select(*[Col(col.name) for col in select_list])
+            if having:
+                having_agg_cols = [col for col in having.all_nested_columns if type(col) is AggCol]
+                for col in having_agg_cols:
+                    col.name = f"_having_{col.name}"
+                agg_cols.extend(having_agg_cols)
+            df = df.group_by(*group_by_cols).agg(*agg_cols)
+            if having:
+                df = df.filter(having.normalize_agg_columns())
+            return df.select(*[Col(col.name) for col in select_list])
         return df.select(*select_list)
 
     def visit_select_list(self, node: Node, visited_children: SelectList) -> list[Col]:  # noqa: ARG002
@@ -163,17 +173,25 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
         _, _, condition = visited_children
         return condition
 
+    def visit_having_clause(self, node: Node, visited_children: WhereType) -> Col:  # noqa: ARG002
+        _, _, condition = visited_children
+        return condition
+
     def visit_select_item(self, node: Node, visited_children: SelectItemType) -> Col:  # noqa: ARG002
         assert len(visited_children) == 1
         return visited_children[0]
 
-    def visit_group_by_clause(self, node: Node, visited_children: list[Any]) -> list[Col]:  # noqa: ARG002
-        _, _, _, _, column, right = visited_children
+    def visit_group_by_clause(self, node: Node, visited_children: list[Any]) -> tuple[list[Col], Col | None]:  # noqa: ARG002
+        _, _, _, _, column, right, having_clause = visited_children
         columns = [column]
         for right_expansion in right:
             _, _, _, right_col = right_expansion
             columns.append(right_col)
-        return columns
+
+        having = None
+        if type(having_clause) is list:
+            ((_, having),) = having_clause
+        return columns, having
 
     def visit_aggregate_function_call(self, node: Node, visited_children: list[Any]) -> AggCol:  # noqa: ARG002
         aggregate_function, _, arguments, _, alias = visited_children
@@ -329,6 +347,28 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
     def visit_atom(self, node: Node, visited_children: AtomType) -> Col:  # noqa: ARG002
         (col,) = visited_children
         return col
+
+    def visit_function_call(self, node: Node, visited_children: list[Any]) -> Col:  # noqa: ARG002
+        function_name, _, _, _, arguments, _, _ = visited_children
+        if type(arguments) is Node:
+            arguments = []
+        else:
+            ((arguments),) = arguments
+        if function_name == "COUNT":
+            assert len(arguments) == 0
+            return F.count()
+        if function_name == "SUM":
+            assert type(arguments) is list
+            assert len(arguments) == 1
+            return F.sum(arguments[0])
+        raise SemanticError(f"Unsupported function: {function_name}")
+
+    def visit_argument_list(self, node: Node, visited_children: list[Any]) -> list[Col]:  # noqa: ARG002
+        expr, right = visited_children
+        arguments = [expr]
+        for _, _, _, arg in right:
+            arguments.append(arg)
+        return arguments
 
     def generic_visit(self, node: Node, visited_children: list[Any]) -> Node | list[Any]:
         return visited_children or node

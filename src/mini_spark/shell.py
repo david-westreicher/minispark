@@ -8,11 +8,10 @@ from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 
-from mini_spark.dataframe import DataFrame
-from mini_spark.plan import PhysicalPlan
-
+from .dataframe import DataFrame
 from .execution import ThreadEngine
 from .parser import SemanticError, parse_sql
+from .plan import PhysicalPlan
 
 kb = KeyBindings()
 

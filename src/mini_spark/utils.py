@@ -36,8 +36,9 @@ def nice_schema(schema: Schema | None) -> str:
     return "[" + ", ".join(f"{name}:{type_.name}" for name, type_ in schema) + "]"
 
 
-def convert_rows_to_columns(rows: Iterable[Row], schema: Schema) -> Columns:
-    return tuple([row[col] for row in rows] for col, _ in schema)
+def convert_columns_to_rows(rows: Columns, schema: Schema) -> Iterable[Row]:
+    for i in range(len(rows[0])):
+        yield {schema[j][0]: rows[j][i] for j in range(len(schema))}
 
 
 @dataclass

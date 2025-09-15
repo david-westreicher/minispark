@@ -8,7 +8,7 @@ from jinja2 import Environment, StrictUndefined
 
 from .constants import Schema
 from .plan import PhysicalPlan, Stage
-from .sql import Col
+from .sql import Col, LikeColumn
 from .tasks import (
     AggregateTask,
     BroadcastHashJoinTask,
@@ -48,12 +48,21 @@ class JinjaColumnReference:
 
 
 class JinjaColumn:
-    def __init__(self, column: Col, function_name: str, input_schema: Schema, *, is_condition: bool = False) -> None:
+    def __init__(
+        self,
+        column: Col,
+        function_name: str,
+        input_schema: Schema,
+        *,
+        is_condition: bool = False,
+        like_columns: list[LikeColumn] | None = None,
+    ) -> None:
         self.function_name = function_name
         if not is_condition:
             output_type = column.infer_type(input_schema)
             self.zig_type = output_type.native_zig_type
             self.struct_type = output_type.zig_type
+        self.like_columns = like_columns or []
         referenced_columns = {col.name for col in column.all_nested_columns}
         self.references = [
             JinjaColumnReference(col_name, col_pos, col_type.native_zig_type, col_type.zig_type)
@@ -116,11 +125,13 @@ class JinjaConsumer:
             self.columns = self.projection_columns
         if self.is_filter:
             assert type(consumer) is FilterTask
+            like_columns = [col for col in consumer.condition.all_nested_columns if type(col) is LikeColumn]
             self.condition = JinjaColumn(
                 consumer.condition,
                 f"{function_name}_condition",
                 consumer.parent_task.inferred_schema,
                 is_condition=True,
+                like_columns=like_columns,
             )
             self.condition_columns = [self.condition]
         if self.is_aggregate:

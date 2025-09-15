@@ -5,6 +5,9 @@ from collections.abc import Iterable
 from copy import deepcopy
 from typing import TYPE_CHECKING, cast
 
+from tabulate import tabulate
+
+from .constants import DEBUG_EXECUTION
 from .io import BlockFile
 from .jobs import Job, JobResult, JoinJob, LoadShuffleFilesJob, OutputFile, ScanJob
 from .sql import BinaryOperatorColumn, Col
@@ -23,11 +26,23 @@ from .tasks import (
     WriteToShufflePartitions,
 )
 from .utils import (
+    convert_columns_to_rows,
     trace,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from .constants import Columns
+
+
+def debug_task_output(task: Task, chunk: Columns | None) -> None:
+    if not DEBUG_EXECUTION or chunk is None:
+        return
+    print(task, "OUTPUT")  # noqa: T201
+    assert task.inferred_schema is not None
+    rows = list(convert_columns_to_rows(chunk, task.inferred_schema))
+    print(tabulate(rows, tablefmt="rounded_outline", headers="keys"))  # noqa: T201
 
 
 class Stage:
@@ -61,8 +76,10 @@ class Stage:
             except StopIteration:
                 chunk = None
                 is_last = True
+            debug_task_output(self.producer, chunk)
             for consumer in self.consumers:
                 chunk, is_last = consumer.execute(chunk, is_last=is_last)
+                debug_task_output(consumer, chunk)
             written_files = self.writer.write(chunk, self.stage_id)
             job_result.output_files += written_files
             if is_last:

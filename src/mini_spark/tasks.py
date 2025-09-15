@@ -265,7 +265,7 @@ class BroadcastHashJoinTask(ProducerTask):
 class AggregateTask(ConsumerTask):
     group_by_column: Col
     agg_columns: list[AggCol]
-    per_column_aggregator: list[dict[Any, int]] = field(default_factory=list)
+    per_column_aggregator: list[dict[Any, int]] = field(default_factory=list, repr=False)
     before_shuffle: bool = True
 
     @trace("AggregateTask")
@@ -333,7 +333,11 @@ class AggregateTask(ConsumerTask):
 
     def explain(self, lvl: int = 0) -> None:
         indent = "  " * lvl + ("+- " if lvl > 0 else "")
-        print(f"{indent} AggregateTask(before_shuffle:{self.before_shuffle}):{nice_schema(self.inferred_schema)}")  # noqa: T201
+        print(  # noqa: T201
+            f"{indent} AggregateTask(group_by: {self.group_by_column}, agg: {self.agg_columns}, "
+            f"before_shuffle:{self.before_shuffle}):"
+            f"{nice_schema(self.inferred_schema)}"
+        )
         self.parent_task.explain(lvl + 1)
 
 
