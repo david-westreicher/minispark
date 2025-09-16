@@ -98,7 +98,7 @@ class Col:
         return SchemaCol(self.name, col_pos)
 
     def zig_code_representation(self, schema: Schema) -> str:  # noqa: ARG002
-        return self.name
+        return self.name.replace(".", "_")
 
     def __str__(self) -> str:
         return self.name
@@ -228,8 +228,8 @@ UNOP_SYMBOLS: dict[Callable[[Col], Col], str] = {
     operator.invert: "not",
 }
 COMPATIBLE_TYPE_CONVERSION = {
-    (ColumnType.INTEGER, ColumnType.FLOAT): ColumnType.FLOAT,
-    (ColumnType.FLOAT, ColumnType.INTEGER): ColumnType.FLOAT,
+    (ColumnType.INTEGER, ColumnType.FLOAT): (ColumnType.FLOAT, True, False),
+    (ColumnType.FLOAT, ColumnType.INTEGER): (ColumnType.FLOAT, False, True),
 }
 
 
@@ -238,6 +238,8 @@ class BinaryOperatorColumn(Col):
     left_side: Col
     right_side: Col
     operator: Callable[[Any, Any], Any]
+    left_type_convert_to: ColumnType | None = None
+    right_type_convert_to: ColumnType | None = None
 
     def __eq__(self, other: Col | ColumnTypePython) -> Col:  # type:ignore[override]
         return super().__eq__(other)
@@ -270,10 +272,17 @@ class BinaryOperatorColumn(Col):
     def infer_type(self, schema: Schema) -> ColumnType:
         left_type = self.left_side.infer_type(schema)
         right_type = self.right_side.infer_type(schema)
-        if left_type == ColumnType.INTEGER and right_type == ColumnType.INTEGER and self.operator == operator.truediv:
+        if self.operator == operator.truediv:
+            if left_type != ColumnType.FLOAT:
+                self.left_type_convert_to = ColumnType.FLOAT
+            if right_type != ColumnType.FLOAT:
+                self.right_type_convert_to = ColumnType.FLOAT
             return ColumnType.FLOAT
         if (left_type, right_type) in COMPATIBLE_TYPE_CONVERSION:
-            return COMPATIBLE_TYPE_CONVERSION[(left_type, right_type)]
+            output_type, convert_left, convert_right = COMPATIBLE_TYPE_CONVERSION[(left_type, right_type)]
+            self.left_type_convert_to = output_type if convert_left else None
+            self.right_type_convert_to = output_type if convert_right else None
+            return output_type
         if left_type != right_type:
             raise TypeError(
                 f"Type mismatch in binary operation: {left_type} {self.operator} {right_type}",
@@ -288,26 +297,28 @@ class BinaryOperatorColumn(Col):
         )
 
     def zig_code_representation(self, schema: Schema) -> str:
+        left_side = self.left_side.zig_code_representation(schema)
+        right_side = self.right_side.zig_code_representation(schema)
+        if self.left_type_convert_to:
+            assert self.left_type_convert_to == ColumnType.FLOAT
+            left_side = f"@as({self.left_type_convert_to.native_zig_type}, @floatFromInt({left_side}))"
+        if self.right_type_convert_to:
+            assert self.right_type_convert_to == ColumnType.FLOAT
+            right_side = f"@as({self.right_type_convert_to.native_zig_type}, @floatFromInt({right_side}))"
         if self.operator == operator.eq:
             left_type = self.left_side.infer_type(schema)
-            right_type = self.left_side.infer_type(schema)
+            right_type = self.right_side.infer_type(schema)
             assert left_type == right_type
             if left_type == ColumnType.STRING:
-                return (
-                    f"std.mem.eql(u8, "
-                    f"({self.left_side.zig_code_representation(schema)}),"
-                    f" ({self.right_side.zig_code_representation(schema)}))"
-                )
+                return f"std.mem.eql(u8, ({left_side}), ({right_side}))"
         if self.operator == operator.mod:
-            return (
-                "@rem("
-                f"({self.left_side.zig_code_representation(schema)}),"
-                f" ({self.right_side.zig_code_representation(schema)}))"
-            )
-        return (
-            f"({self.left_side.zig_code_representation(schema)}) {BINOP_SYMBOLS[self.operator]}"
-            f" ({self.right_side.zig_code_representation(schema)})"
-        )
+            return f"@rem(({left_side}), ({right_side}))"
+        left_type = self.left_side.infer_type(schema)
+        right_type = self.right_side.infer_type(schema)
+        if left_type == right_type == ColumnType.STRING and self.operator == operator.add:
+            # TODO(david): don't nest concatString calls
+            return f"try concatStrings(allocator, &[_]{ColumnType.STRING.native_zig_type}{{{left_side}, {right_side}}})"
+        return f"({left_side}) {BINOP_SYMBOLS[self.operator]} ({right_side})"
 
     def normalize_agg_columns(self) -> Col:
         return BinaryOperatorColumn(

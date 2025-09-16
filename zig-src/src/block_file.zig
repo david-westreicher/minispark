@@ -5,6 +5,7 @@ pub const ROWS_PER_BLOCK = 2 * 1024 * 1024;
 
 pub const TYPE_I32: u8 = 0;
 pub const TYPE_STR: u8 = 1;
+pub const TYPE_F32: u8 = 2;
 pub const Error = error{
     NameTooLong,
     StringTooLong,
@@ -139,6 +140,7 @@ pub const StringColumn = struct {
 
 pub const ColumnData = union(enum) {
     I32: []const i32,
+    F32: []const f32,
     Str: StringColumn,
 
     pub fn write(self: ColumnData, allocator: std.mem.Allocator, writer: *std.fs.File.Writer, offset: ?usize, end: ?usize) !void {
@@ -146,6 +148,12 @@ pub const ColumnData = union(enum) {
         const fini = end orelse self.len();
         switch (self) {
             .I32 => |vals| {
+                const values = vals[start..fini];
+                const col_len: u32 = @intCast(values.len * 4);
+                try writer.interface.writeAll(std.mem.asBytes(&col_len));
+                try writer.interface.writeAll(std.mem.sliceAsBytes(values));
+            },
+            .F32 => |vals| {
                 const values = vals[start..fini];
                 const col_len: u32 = @intCast(values.len * 4);
                 try writer.interface.writeAll(std.mem.asBytes(&col_len));
@@ -186,6 +194,7 @@ pub const ColumnData = union(enum) {
     pub fn len(self: ColumnData) usize {
         return switch (self) {
             .I32 => |vals| vals.len,
+            .F32 => |vals| vals.len,
             .Str => |vals| vals.slices.len,
         };
     }
@@ -193,6 +202,7 @@ pub const ColumnData = union(enum) {
     pub fn deinit(self: *ColumnData, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .I32 => |vals| allocator.free(vals),
+            .F32 => |vals| allocator.free(vals),
             .Str => |*vals| vals.deinit(allocator),
         }
     }
@@ -204,6 +214,11 @@ pub const ColumnData = union(enum) {
                 const vals = try allocator.alloc(i32, row_count);
                 try reader.interface.readSliceAll(std.mem.sliceAsBytes(vals));
                 return ColumnData{ .I32 = vals };
+            },
+            TYPE_F32 => {
+                const vals = try allocator.alloc(f32, row_count);
+                try reader.interface.readSliceAll(std.mem.sliceAsBytes(vals));
+                return ColumnData{ .F32 = vals };
             },
             TYPE_STR => {
                 const lengths = try allocator.alloc(u8, row_count);
@@ -284,6 +299,13 @@ pub const Block = struct {
                     @memcpy(new_vals[0..vals.len], vals);
                     @memcpy(new_vals[vals.len..], other_vals);
                     merged_cols[col_idx] = ColumnData{ .I32 = new_vals };
+                },
+                .F32 => |vals| {
+                    const other_vals = col_right.F32;
+                    const new_vals = try allocator.alloc(f32, vals.len + other_vals.len);
+                    @memcpy(new_vals[0..vals.len], vals);
+                    @memcpy(new_vals[vals.len..], other_vals);
+                    merged_cols[col_idx] = ColumnData{ .F32 = new_vals };
                 },
                 .Str => |vals| {
                     merged_cols[col_idx] = ColumnData{ .Str = try vals.append(allocator, col_right.Str) };
@@ -465,12 +487,14 @@ test "write -> read block" {
     const schema = Schema{ .columns = (&[_]ColumnSchema{
         .{ .typ = TYPE_I32, .name = "delta" },
         .{ .typ = TYPE_STR, .name = "msg" },
+        .{ .typ = TYPE_F32, .name = "float" },
     })[0..] };
     const col1 = ColumnData{ .I32 = &[_]i32{ -1, 2, 3 } };
     var col_str = try StringColumn.init(allocator, &[_][]const u8{ "hello", "zig", "!" });
     const col2 = ColumnData{ .Str = col_str };
     defer col_str.deinit(allocator);
-    var block_data = [_]ColumnData{ col1, col2 };
+    const col3 = ColumnData{ .F32 = &[_]f32{ -1.0, 2.0, 3.0 } };
+    var block_data = [_]ColumnData{ col1, col2, col3 };
     const block = Block{ .cols = block_data[0..] };
 
     var write_block_file = try BlockFile.init(allocator, schema, "tmp/test.bin");

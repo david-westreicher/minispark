@@ -65,7 +65,7 @@ class JinjaColumn:
         self.like_columns = like_columns or []
         referenced_columns = {col.name for col in column.all_nested_columns}
         self.references = [
-            JinjaColumnReference(col_name, col_pos, col_type.native_zig_type, col_type.zig_type)
+            JinjaColumnReference(col_name.replace(".", "_"), col_pos, col_type.native_zig_type, col_type.zig_type)
             for col_pos, (col_name, col_type) in enumerate(input_schema)
             if col_name in referenced_columns
         ]
@@ -140,7 +140,9 @@ class JinjaConsumer:
             self.object_name = f"{self.class_name}_obj"
             self.entry_class_name = f"{self.class_name}_Entry"
             self.function_name = f"{self.object_name}.next"
-            self.group_column = JinjaColumn(consumer.group_by_column, "", consumer.parent_task.inferred_schema)
+            self.group_column = JinjaColumn(
+                consumer.group_by_column, f"{function_name}_project_groupby", consumer.parent_task.inferred_schema
+            )
             self.agg_columns = [
                 JinjaColumn(
                     column,
@@ -150,7 +152,7 @@ class JinjaConsumer:
                 for i, column in enumerate(consumer.agg_columns)
             ]
             if consumer.before_shuffle:
-                self.projection_columns = [
+                self.projection_columns = [self.group_column] + [
                     JinjaColumn(
                         column.original_col,
                         f"{function_name}_project_{i}",
