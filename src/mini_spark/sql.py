@@ -313,6 +313,11 @@ class BinaryOperatorColumn(Col):
                 return f"std.mem.eql(u8, ({left_side}), ({right_side}))"
         if self.operator == operator.mod:
             return f"@rem(({left_side}), ({right_side}))"
+        left_type = self.left_side.infer_type(schema)
+        right_type = self.right_side.infer_type(schema)
+        if left_type == right_type == ColumnType.STRING and self.operator == operator.add:
+            # TODO(david): don't nest concatString calls
+            return f"try concatStrings(allocator, &[_]{ColumnType.STRING.native_zig_type}{{{left_side}, {right_side}}})"
         return f"({left_side}) {BINOP_SYMBOLS[self.operator]} ({right_side})"
 
     def normalize_agg_columns(self) -> Col:

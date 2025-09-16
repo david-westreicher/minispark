@@ -281,6 +281,21 @@ const AnyList = union(enum) {
     }
 };
 
+pub inline fn concatStrings(allocator: std.mem.Allocator, strings: []const []const u8) ![]u8 {
+    var total_len: usize = 0;
+    for (strings) |s| {
+        total_len += s.len;
+    }
+
+    var result = try allocator.alloc(u8, total_len);
+    var offset: usize = 0;
+    for (strings) |s| {
+        @memcpy(result[offset .. offset + s.len], s);
+        offset += s.len;
+    }
+    return result;
+}
+
 pub fn JoinProducer(comptime K: type) type {
     return struct {
         const MapType = if (K == []const u8)

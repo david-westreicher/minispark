@@ -1,10 +1,12 @@
 const std = @import("std");
+const Regex = @import("regex").Regex;
 const Executor = @import("executor");
 const ColumnData = @import("executor").ColumnData;
 const ColumnSchema = @import("executor").ColumnSchema;
 const Block = @import("executor").Block;
 const Schema = @import("executor").Schema;
 const StringColumn = @import("executor").StringColumn;
+const concatStrings = @import("executor").concatStrings;
 const Job = @import("executor").Job;
 const Tracer = @import("executor").GLOBAL_TRACER;
 const OutputFile = @import("executor").OutputFile;
@@ -47,12 +49,12 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block) ![]u8 {
 
 // ###### Condition columns
 //{% for col in plan.condition_columns %}
-pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output: []bool) void {
+pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, output: []bool) !void {
     //{%- if not col.like_columns %}
     _ = allocator;
     //{%- endif %}
-    //{%- for col in col.like_columns %} // TODO: https://github.com/tiehuis/zig-regex/pull/39
-    var re = try std.regex.compile(allocator, "{{col.regex}}");
+    //{%- for col in col.like_columns %}
+    var re = try Regex.compile(allocator, "{{col.regex}}");
     //{%- endfor %}
     //{%- for ref in col.references %}
     const col_{{ref.name}} = block.cols[{{ref.pos}}].{{ref.struct_type}};
@@ -120,7 +122,7 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
             try Executor.GLOBAL_TRACER.startEvent("{{consumer.condition.function_name}}");
             const rows = block.rows();
             const condition_col = try allocator.alloc(bool, rows);
-            {{consumer.condition.function_name}}(allocator, block, condition_col);
+            _ = try {{consumer.condition.function_name}}(allocator, block, condition_col);
             var output_rows: usize = 0;
             for (condition_col) |c| {
                 if (c) output_rows += 1;
@@ -211,18 +213,10 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
                     //{%- endif %}
                 //{%- endfor %}
                 for (col_key, {{ consumer.agg_column_names }}) |key, {{ consumer.agg_column_var_names }}| {
-                    //{%- for col in consumer.agg_columns %}
-                        //{%- if col.real_column.type == 'count' %} // TODO can remove count
-                            _ = c{{loop.index0}};
-                        //{%- endif %}
-                    //{%- endfor %}
                     const existing = try self.aggregator.getOrPut(key);
                     if (existing.found_existing) {
                         var entry = existing.value_ptr;
                         //{%- for col in consumer.agg_columns %}
-                            //{%- if col.real_column.type == 'count' %} // TODO can remove count
-                        entry.agg_{{loop.index0}} += 1;
-                            //{%- endif %}
                             //{%- if col.real_column.type == 'sum' %}
                         entry.agg_{{loop.index0}} += c{{loop.index0}};
                             //{%- endif %}
@@ -237,12 +231,7 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
                         existing.value_ptr.* = .{
                             .key_0 = key,
                             //{%- for col in consumer.agg_columns %}
-                                //{%- if col.real_column.type == 'count' %}
-                            .agg_{{loop.index0}} = 1,
-                                //{%- endif %}
-                                //{%- if col.real_column.type in ['min', 'max', 'sum'] %}
                             .agg_{{loop.index0}} = c{{loop.index0}},
-                                //{%- endif %}
                             //{%- endfor %}
                         };
                     }
