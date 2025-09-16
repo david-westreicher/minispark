@@ -380,6 +380,7 @@ TEST_QUERIES = [
             ("first_name", "product", "order_date"),
             [
                 ("Hank", "Laptop", "2025-05-10"),
+                ("Grace", "Monitor", "2025-05-05"),
                 ("Ivy", "Mouse", "2025-06-01"),
                 ("Jack", "Keyboard", "2025-06-15"),
                 ("Kate", "Monitor", "2025-07-01"),

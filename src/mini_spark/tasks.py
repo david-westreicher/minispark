@@ -251,6 +251,8 @@ class BroadcastHashJoinTask(ProducerTask):
         unknown_cols = [col for col in referenced_column_names if col not in schema_cols]
         if unknown_cols:
             raise ValueError(f"Unknown columns in Join: {unknown_cols}")
+        assert type(self.join_condition) is BinaryOperatorColumn, "Only equi-join is supported"
+        self.left_key, self.right_key = self.join_condition.extract_left_right_key(self.left_schema, self.right_schema)
         return self.left_schema + self.right_schema
 
     def explain(self, lvl: int = 0) -> None:

@@ -327,6 +327,20 @@ class BinaryOperatorColumn(Col):
             operator=self.operator,
         )
 
+    def extract_left_right_key(self, left_schema: Schema, right_schema: Schema) -> tuple[Col, Col]:
+        assert type(self.left_side) is Col
+        assert type(self.right_side) is Col
+        left_col_name = self.left_side.name
+        right_col_name = self.right_side.name
+        assert left_col_name != right_col_name, "Join keys must be different columns"
+        left_column_names = {col_name for col_name, _ in left_schema}
+        right_column_names = {col_name for col_name, _ in right_schema}
+        if left_col_name in left_column_names and right_col_name in right_column_names:
+            return self.left_side, self.right_side
+        if left_col_name in right_column_names and right_col_name in left_column_names:
+            return self.right_side, self.left_side
+        raise ValueError("Join keys must be from different tables")  # noqa: EM101
+
 
 @dataclass
 class Lit(Col):
