@@ -16,3 +16,11 @@ pub const Error = error{
     UnknownType,
     UnexpectedState,
 };
+
+test "all" {
+    _ = @import("block_file.zig");
+    _ = @import("job.zig");
+    _ = @import("task_utils.zig");
+    _ = @import("tasks.zig");
+    _ = @import("utils.zig");
+}

@@ -44,3 +44,7 @@ jobs:
 
       - name: Run pytest
         run: pytest
+
+      - name: Run zig test
+        run: zig build test
+        working-directory: ./zig-src

@@ -340,7 +340,7 @@ test "write -> append -> read block" {
     const ColumnSchema = @import("block_file.zig").ColumnSchema;
     var tmp = std.testing.tmpDir(.{}); // options: .{ .keep = true } if you want to inspect files
     defer tmp.cleanup();
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     Executor.GLOBAL_TRACER = try Tracer.init(allocator);
     defer Executor.GLOBAL_TRACER.deinit(allocator);
 
