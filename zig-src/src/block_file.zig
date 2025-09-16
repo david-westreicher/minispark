@@ -3,10 +3,13 @@ const std = @import("std");
 const SIZE_32KB = 32 * 1024;
 pub const ROWS_PER_BLOCK = 2 * 1024 * 1024;
 
-pub const TYPE_I32: u8 = 0;
-pub const TYPE_STR: u8 = 1;
-pub const TYPE_F32: u8 = 2;
-pub const TYPE_I64: u8 = 3;
+pub const ColumnType = enum(u8) {
+    I32 = 0,
+    STR = 1,
+    F32 = 2,
+    I64 = 3,
+};
+
 pub const Error = error{
     NameTooLong,
     StringTooLong,
@@ -15,7 +18,7 @@ pub const Error = error{
 };
 
 pub const ColumnSchema = struct {
-    typ: u8,
+    typ: ColumnType,
     name: []const u8,
 
     pub fn read(allocator: std.mem.Allocator, reader: *std.fs.File.Reader) !ColumnSchema {
@@ -23,13 +26,13 @@ pub const ColumnSchema = struct {
         const name_len = try reader.interface.takeInt(u8, .little);
         const name_buf = try allocator.alloc(u8, name_len);
         try reader.interface.readSliceAll(name_buf);
-        return ColumnSchema{ .typ = col_type, .name = name_buf };
+        return ColumnSchema{ .typ = @enumFromInt(col_type), .name = name_buf };
     }
 
     pub fn write(self: *const ColumnSchema, writer: *std.fs.File.Writer) !void {
         if (self.name.len > 255) return Error.NameTooLong;
 
-        try writer.interface.writeAll(&[_]u8{self.typ});
+        try writer.interface.writeAll(&[_]u8{@intFromEnum(self.typ)});
         try writer.interface.writeAll(&[_]u8{@intCast(self.name.len)});
         try writer.interface.writeAll(self.name);
     }
@@ -217,25 +220,25 @@ pub const ColumnData = union(enum) {
         }
     }
 
-    pub fn readColumn(allocator: std.mem.Allocator, reader: *std.fs.File.Reader, typ: u8, row_count: u32) !ColumnData {
+    pub fn readColumn(allocator: std.mem.Allocator, reader: *std.fs.File.Reader, typ: ColumnType, row_count: u32) !ColumnData {
         _ = try reader.interface.takeInt(u32, .little);
         switch (typ) {
-            TYPE_I32 => {
+            ColumnType.I32 => {
                 const vals = try allocator.alloc(i32, row_count);
                 try reader.interface.readSliceAll(std.mem.sliceAsBytes(vals));
                 return ColumnData{ .I32 = vals };
             },
-            TYPE_I64 => {
+            ColumnType.I64 => {
                 const vals = try allocator.alloc(i64, row_count);
                 try reader.interface.readSliceAll(std.mem.sliceAsBytes(vals));
                 return ColumnData{ .I64 = vals };
             },
-            TYPE_F32 => {
+            ColumnType.F32 => {
                 const vals = try allocator.alloc(f32, row_count);
                 try reader.interface.readSliceAll(std.mem.sliceAsBytes(vals));
                 return ColumnData{ .F32 = vals };
             },
-            TYPE_STR => {
+            ColumnType.STR => {
                 const lengths = try allocator.alloc(u8, row_count);
                 defer allocator.free(lengths);
 
@@ -258,9 +261,6 @@ pub const ColumnData = union(enum) {
                     .total_buffer = string_buffer,
                     .slices = string_columns,
                 } };
-            },
-            else => {
-                return Error.UnknownType;
             },
         }
     }
@@ -507,9 +507,9 @@ test "write -> read block" {
     const allocator = std.testing.allocator;
 
     const schema = Schema{ .columns = (&[_]ColumnSchema{
-        .{ .typ = TYPE_I32, .name = "delta" },
-        .{ .typ = TYPE_STR, .name = "msg" },
-        .{ .typ = TYPE_F32, .name = "float" },
+        .{ .typ = ColumnType.I32, .name = "delta" },
+        .{ .typ = ColumnType.STR, .name = "msg" },
+        .{ .typ = ColumnType.F32, .name = "float" },
     })[0..] };
     const col1 = ColumnData{ .I32 = &[_]i32{ -1, 2, 3 } };
     var col_str = try StringColumn.init(allocator, &[_][]const u8{ "hello", "zig", "!" });
@@ -537,8 +537,8 @@ test "write -> append -> read block" {
     const allocator = std.testing.allocator;
 
     const schema = Schema{ .columns = (&[_]ColumnSchema{
-        .{ .typ = TYPE_I32, .name = "delta" },
-        .{ .typ = TYPE_STR, .name = "msg" },
+        .{ .typ = ColumnType.I32, .name = "delta" },
+        .{ .typ = ColumnType.STR, .name = "msg" },
     })[0..] };
     const col1 = ColumnData{ .I32 = &[_]i32{ -1, 2, 3 } };
     var col_str = try StringColumn.init(allocator, &[_][]const u8{ "hello", "zig", "!" });
