@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .constants import ColumnType, ColumnTypePython, Schema
+from .io import datetime_to_timestamp
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -384,10 +385,12 @@ class Lit(Col):
         return self
 
     def zig_code_representation(self, schema: Schema) -> str:  # noqa: ARG002
-        if type(self.value) is int:
+        if type(self.value) in {int, float}:
             return str(self.value)
         if type(self.value) is str:
             return f'"{self.value}"'
+        if type(self.value) is datetime:
+            return str(datetime_to_timestamp(self.value))
         raise NotImplementedError(f"Zig code generation for literal {self.value} not implemented")
 
 

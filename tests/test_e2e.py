@@ -5,13 +5,13 @@ from typing import Any
 import pytest
 
 from mini_spark.constants import ColumnType, Row
-from mini_spark.execution import ExecutionEngine, PythonExecutionEngine
+from mini_spark.execution import ExecutionEngine, PythonExecutionEngine, ThreadEngine
 from mini_spark.io import BlockFile
 from mini_spark.parser import parse_sql
 
 from .conftest import assert_rows_equal
 
-ENGINES = [PythonExecutionEngine]
+ENGINES = [PythonExecutionEngine, ThreadEngine]
 FLOAT = ColumnType.FLOAT
 INT = ColumnType.INTEGER
 STR = ColumnType.STRING

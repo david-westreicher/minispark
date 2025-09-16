@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const TYPE_STR = @import("block_file.zig").TYPE_STR;
 pub const TYPE_I32 = @import("block_file.zig").TYPE_I32;
+pub const TYPE_I64 = @import("block_file.zig").TYPE_I64;
 pub const TYPE_F32 = @import("block_file.zig").TYPE_F32;
 pub const ROWS_PER_BLOCK = @import("block_file.zig").ROWS_PER_BLOCK;
 pub const BlockFile = @import("block_file.zig").BlockFile;
@@ -145,6 +146,17 @@ pub fn filter_column(col: ColumnData, condition_col: []const bool, output_rows: 
             }
             return ColumnData{ .I32 = filtered_vals };
         },
+        .I64 => |vals| {
+            const filtered_vals = try allocator.alloc(i64, output_rows);
+            var filter_index: u64 = 0;
+            for (vals, condition_col) |input_val, c| {
+                if (c) {
+                    filtered_vals[filter_index] = input_val;
+                    filter_index += 1;
+                }
+            }
+            return ColumnData{ .I64 = filtered_vals };
+        },
         .F32 => |vals| {
             const filtered_vals = try allocator.alloc(f32, output_rows);
             var filter_index: u32 = 0;
@@ -203,6 +215,9 @@ pub fn fill_buckets_F32(
         .I32 => |_| {
             @panic("unexpected type");
         },
+        .I64 => |_| {
+            @panic("unexpected type");
+        },
         .Str => |_| {
             @panic("unexpected type");
         },
@@ -225,6 +240,37 @@ pub fn fill_buckets_I32(
             }
             return buckets;
         },
+        .I64 => |_| {
+            @panic("unexpected type");
+        },
+        .F32 => |_| {
+            @panic("unexpected type");
+        },
+        .Str => |_| {
+            @panic("unexpected type");
+        },
+    }
+}
+pub fn fill_buckets_I64(
+    allocator: std.mem.Allocator,
+    column: ColumnData,
+    bucket_sizes: [PARTITIONS]u32,
+    partition_per_row: []const u8,
+) ![PARTITIONS]std.ArrayList(i64) {
+    switch (column) {
+        .I64 => |vals| {
+            var buckets: [PARTITIONS]std.ArrayList(i64) = undefined;
+            for (0..PARTITIONS) |i| {
+                buckets[i] = try std.ArrayList(i64).initCapacity(allocator, bucket_sizes[i]);
+            }
+            for (partition_per_row, vals) |p, val| {
+                try buckets[p].append(allocator, val);
+            }
+            return buckets;
+        },
+        .I32 => |_| {
+            @panic("unexpected type");
+        },
         .F32 => |_| {
             @panic("unexpected type");
         },
@@ -241,6 +287,9 @@ pub fn fill_buckets_Str(
 ) ![PARTITIONS]std.ArrayList([]const u8) {
     switch (column) {
         .I32 => |_| {
+            @panic("unexpected type");
+        },
+        .I64 => |_| {
             @panic("unexpected type");
         },
         .F32 => |_| {
@@ -271,6 +320,7 @@ pub const OutputFile = struct {
 
 const AnyList = union(enum) {
     IntList: std.ArrayList(i32),
+    Int64List: std.ArrayList(i64),
     FloatList: std.ArrayList(f32),
     StrList: std.ArrayList([]const u8),
 
@@ -357,6 +407,8 @@ pub fn JoinProducer(comptime K: type) type {
                 for (left_columns, self.left_schema.columns) |*col, schema_col| {
                     if (schema_col.typ == TYPE_I32) {
                         col.* = AnyList{ .IntList = try std.ArrayList(i32).initCapacity(self.allocator, ROWS_PER_BLOCK) };
+                    } else if (schema_col.typ == TYPE_I64) {
+                        col.* = AnyList{ .Int64List = try std.ArrayList(i64).initCapacity(self.allocator, ROWS_PER_BLOCK) };
                     } else if (schema_col.typ == TYPE_F32) {
                         col.* = AnyList{ .FloatList = try std.ArrayList(f32).initCapacity(self.allocator, ROWS_PER_BLOCK) };
                     } else if (schema_col.typ == TYPE_STR) {
@@ -387,6 +439,14 @@ pub fn JoinProducer(comptime K: type) type {
                             .IntList => |*list| {
                                 switch (col_data) {
                                     .I32 => |vals| {
+                                        try list.appendSlice(self.allocator, vals);
+                                    },
+                                    else => return Error.UnknownType,
+                                }
+                            },
+                            .Int64List => |*list| {
+                                switch (col_data) {
+                                    .I64 => |vals| {
                                         try list.appendSlice(self.allocator, vals);
                                     },
                                     else => return Error.UnknownType,
@@ -434,6 +494,10 @@ pub fn JoinProducer(comptime K: type) type {
             for (self.left_schema.columns, 0..) |schema_col, idx| {
                 if (schema_col.typ == TYPE_I32) {
                     output_columns[idx] = AnyList{ .IntList = try std.ArrayList(i32).initCapacity(self.allocator, chunk.rows()) };
+                } else if (schema_col.typ == TYPE_I64) {
+                    output_columns[idx] = AnyList{ .Int64List = try std.ArrayList(i64).initCapacity(self.allocator, chunk.rows()) };
+                } else if (schema_col.typ == TYPE_F32) {
+                    output_columns[idx] = AnyList{ .FloatList = try std.ArrayList(f32).initCapacity(self.allocator, chunk.rows()) };
                 } else if (schema_col.typ == TYPE_STR) {
                     output_columns[idx] = AnyList{ .StrList = try std.ArrayList([]const u8).initCapacity(self.allocator, chunk.rows()) };
                 } else {
@@ -444,6 +508,9 @@ pub fn JoinProducer(comptime K: type) type {
                 switch (chunk_col) {
                     .I32 => |vals| {
                         output_columns[idx] = AnyList{ .IntList = try std.ArrayList(i32).initCapacity(self.allocator, vals.len) };
+                    },
+                    .I64 => |vals| {
+                        output_columns[idx] = AnyList{ .Int64List = try std.ArrayList(i64).initCapacity(self.allocator, vals.len) };
                     },
                     .F32 => |vals| {
                         output_columns[idx] = AnyList{ .FloatList = try std.ArrayList(f32).initCapacity(self.allocator, vals.len) };
@@ -461,6 +528,12 @@ pub fn JoinProducer(comptime K: type) type {
                         .IntList => |left_rows| {
                             for (left_rows_idx.items) |left_row_idx| {
                                 var output_col = &output_columns[output_col_idx].IntList;
+                                try output_col.append(self.allocator, left_rows.items[left_row_idx]);
+                            }
+                        },
+                        .Int64List => |left_rows| {
+                            for (left_rows_idx.items) |left_row_idx| {
+                                var output_col = &output_columns[output_col_idx].Int64List;
                                 try output_col.append(self.allocator, left_rows.items[left_row_idx]);
                             }
                         },
@@ -485,6 +558,11 @@ pub fn JoinProducer(comptime K: type) type {
                             const right_value = vals[right_row_idx];
                             try output_col.appendNTimes(self.allocator, right_value, left_rows_idx.items.len);
                         },
+                        .I64 => |vals| {
+                            var output_col = &output_columns[output_col_idx].Int64List;
+                            const right_value = vals[right_row_idx];
+                            try output_col.appendNTimes(self.allocator, right_value, left_rows_idx.items.len);
+                        },
                         .F32 => |vals| {
                             var output_col = &output_columns[output_col_idx].FloatList;
                             const right_value = vals[right_row_idx];
@@ -504,6 +582,10 @@ pub fn JoinProducer(comptime K: type) type {
                     .IntList => |list| {
                         var mutable_list = list;
                         col.* = ColumnData{ .I32 = try mutable_list.toOwnedSlice(self.allocator) };
+                    },
+                    .Int64List => |list| {
+                        var mutable_list = list;
+                        col.* = ColumnData{ .I64 = try mutable_list.toOwnedSlice(self.allocator) };
                     },
                     .FloatList => |list| {
                         var mutable_list = list;
