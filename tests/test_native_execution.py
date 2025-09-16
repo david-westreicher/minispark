@@ -1,4 +1,3 @@
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,4 +24,3 @@ def test_overflow(tmp_path: Path):
         {"num1_add_num2": -2},
     ]
     assert rows == expected_rows
-    time.sleep(1)

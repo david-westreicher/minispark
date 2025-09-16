@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const TYPE_STR = @import("block_file.zig").TYPE_STR;
 pub const TYPE_I32 = @import("block_file.zig").TYPE_I32;
+pub const TYPE_F32 = @import("block_file.zig").TYPE_F32;
 pub const ROWS_PER_BLOCK = @import("block_file.zig").ROWS_PER_BLOCK;
 pub const BlockFile = @import("block_file.zig").BlockFile;
 pub const Block = @import("block_file.zig").Block;
@@ -44,6 +45,7 @@ pub const Tracer = struct {
     }
 
     pub fn startEvent(self: *Tracer, name: []const u8) !void {
+        std.debug.print("start - {s}\n", .{name});
         try self.events.append(self.allocator, TraceEvent{
             .name = name,
             .time = self.timer.read(),
@@ -52,6 +54,7 @@ pub const Tracer = struct {
     }
 
     pub fn endEvent(self: *Tracer, name: []const u8) !void {
+        std.debug.print("end - {s}\n", .{name});
         try self.events.append(self.allocator, TraceEvent{
             .name = name,
             .time = self.timer.read(),
@@ -142,6 +145,17 @@ pub fn filter_column(col: ColumnData, condition_col: []const bool, output_rows: 
             }
             return ColumnData{ .I32 = filtered_vals };
         },
+        .F32 => |vals| {
+            const filtered_vals = try allocator.alloc(f32, output_rows);
+            var filter_index: u32 = 0;
+            for (vals, condition_col) |input_val, c| {
+                if (c) {
+                    filtered_vals[filter_index] = input_val;
+                    filter_index += 1;
+                }
+            }
+            return ColumnData{ .F32 = filtered_vals };
+        },
         .Str => |vals| {
             var total_output_len: usize = 0;
             for (vals.slices, condition_col) |string, c| {
@@ -169,6 +183,31 @@ pub fn filter_column(col: ColumnData, condition_col: []const bool, output_rows: 
     }
 }
 
+pub fn fill_buckets_F32(
+    allocator: std.mem.Allocator,
+    column: ColumnData,
+    bucket_sizes: [PARTITIONS]u32,
+    partition_per_row: []const u8,
+) ![PARTITIONS]std.ArrayList(f32) {
+    switch (column) {
+        .F32 => |vals| {
+            var buckets: [PARTITIONS]std.ArrayList(f32) = undefined;
+            for (0..PARTITIONS) |i| {
+                buckets[i] = try std.ArrayList(f32).initCapacity(allocator, bucket_sizes[i]);
+            }
+            for (partition_per_row, vals) |p, val| {
+                try buckets[p].append(allocator, val);
+            }
+            return buckets;
+        },
+        .I32 => |_| {
+            @panic("unexpected type");
+        },
+        .Str => |_| {
+            @panic("unexpected type");
+        },
+    }
+}
 pub fn fill_buckets_I32(
     allocator: std.mem.Allocator,
     column: ColumnData,
@@ -186,6 +225,9 @@ pub fn fill_buckets_I32(
             }
             return buckets;
         },
+        .F32 => |_| {
+            @panic("unexpected type");
+        },
         .Str => |_| {
             @panic("unexpected type");
         },
@@ -199,6 +241,9 @@ pub fn fill_buckets_Str(
 ) ![PARTITIONS]std.ArrayList([]const u8) {
     switch (column) {
         .I32 => |_| {
+            @panic("unexpected type");
+        },
+        .F32 => |_| {
             @panic("unexpected type");
         },
         .Str => |vals| {
@@ -226,6 +271,7 @@ pub const OutputFile = struct {
 
 const AnyList = union(enum) {
     IntList: std.ArrayList(i32),
+    FloatList: std.ArrayList(f32),
     StrList: std.ArrayList([]const u8),
 
     pub fn deinit(self: *AnyList, allocator: std.mem.Allocator) void {
@@ -290,6 +336,8 @@ pub const JoinProducer = struct {
             for (left_columns, self.left_schema.columns) |*col, schema_col| {
                 if (schema_col.typ == TYPE_I32) {
                     col.* = AnyList{ .IntList = try std.ArrayList(i32).initCapacity(self.allocator, ROWS_PER_BLOCK) };
+                } else if (schema_col.typ == TYPE_F32) {
+                    col.* = AnyList{ .FloatList = try std.ArrayList(f32).initCapacity(self.allocator, ROWS_PER_BLOCK) };
                 } else if (schema_col.typ == TYPE_STR) {
                     col.* = AnyList{ .StrList = try std.ArrayList([]const u8).initCapacity(self.allocator, ROWS_PER_BLOCK) };
                 } else {
@@ -315,6 +363,14 @@ pub const JoinProducer = struct {
                         .IntList => |*list| {
                             switch (col_data) {
                                 .I32 => |vals| {
+                                    try list.appendSlice(self.allocator, vals);
+                                },
+                                else => return Error.UnknownType,
+                            }
+                        },
+                        .FloatList => |*list| {
+                            switch (col_data) {
+                                .F32 => |vals| {
                                     try list.appendSlice(self.allocator, vals);
                                 },
                                 else => return Error.UnknownType,
@@ -362,6 +418,9 @@ pub const JoinProducer = struct {
                 .I32 => |vals| {
                     output_columns[idx] = AnyList{ .IntList = try std.ArrayList(i32).initCapacity(self.allocator, vals.len) };
                 },
+                .F32 => |vals| {
+                    output_columns[idx] = AnyList{ .FloatList = try std.ArrayList(f32).initCapacity(self.allocator, vals.len) };
+                },
                 .Str => |vals| {
                     output_columns[idx] = AnyList{ .StrList = try std.ArrayList([]const u8).initCapacity(self.allocator, vals.slices.len) };
                 },
@@ -375,6 +434,12 @@ pub const JoinProducer = struct {
                     .IntList => |left_rows| {
                         for (left_rows_idx.items) |left_row_idx| {
                             var output_col = &output_columns[output_col_idx].IntList;
+                            try output_col.append(self.allocator, left_rows.items[left_row_idx]);
+                        }
+                    },
+                    .FloatList => |left_rows| {
+                        for (left_rows_idx.items) |left_row_idx| {
+                            var output_col = &output_columns[output_col_idx].FloatList;
                             try output_col.append(self.allocator, left_rows.items[left_row_idx]);
                         }
                     },
@@ -393,6 +458,11 @@ pub const JoinProducer = struct {
                         const right_value = vals[right_row_idx];
                         try output_col.appendNTimes(self.allocator, right_value, left_rows_idx.items.len);
                     },
+                    .F32 => |vals| {
+                        var output_col = &output_columns[output_col_idx].FloatList;
+                        const right_value = vals[right_row_idx];
+                        try output_col.appendNTimes(self.allocator, right_value, left_rows_idx.items.len);
+                    },
                     .Str => |vals| {
                         var output_col = &output_columns[output_col_idx].StrList;
                         const right_value = vals.slices[right_row_idx];
@@ -407,6 +477,10 @@ pub const JoinProducer = struct {
                 .IntList => |list| {
                     var mutable_list = list;
                     col.* = ColumnData{ .I32 = try mutable_list.toOwnedSlice(self.allocator) };
+                },
+                .FloatList => |list| {
+                    var mutable_list = list;
+                    col.* = ColumnData{ .F32 = try mutable_list.toOwnedSlice(self.allocator) };
                 },
                 .StrList => |list| {
                     col.* = ColumnData{ .Str = try StringColumn.init(self.allocator, list.items) };
