@@ -1,21 +1,22 @@
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from mini_spark.constants import ColumnType, Row
-from mini_spark.execution import ExecutionEngine, PythonExecutionEngine, ThreadEngine
+from mini_spark.execution import ExecutionEngine, PythonExecutionEngine
 from mini_spark.io import BlockFile
 from mini_spark.parser import parse_sql
 
 from .conftest import assert_rows_equal
 
-pytest.skip("Skipping this test file", allow_module_level=True)
-
-ENGINES = [ThreadEngine, PythonExecutionEngine]
+ENGINES = [PythonExecutionEngine]
 FLOAT = ColumnType.FLOAT
 INT = ColumnType.INTEGER
 STR = ColumnType.STRING
+TIMESTAMP = ColumnType.TIMESTAMP
+to_date = datetime.fromisoformat
 
 USERS = [
     (1, "Alice", "Smith", 25, "USA"),
@@ -69,7 +70,7 @@ def test_data_orders(tmp_path: Path):
         ("product", STR),
         ("quantity", INT),
         ("price", FLOAT),
-        ("order_date", STR),
+        ("order_date", TIMESTAMP),
     ]
     column_data = tuple(map(list, zip(*ORDERS, strict=True)))
     BlockFile(tmp_path / "orders", schema).write_data(column_data)
@@ -174,13 +175,13 @@ TEST_QUERIES = [
         to_rows(
             ("order_id", "user_id", "product", "quantity", "price", "order_date"),
             [
-                (1, 1, "Laptop", 1, 1200.0, "2025-01-01"),
-                (4, 1, "Monitor", 2, 300.0, "2025-03-15"),
-                (5, 4, "Laptop", 1, 1100.0, "2025-03-20"),
-                (8, 7, "Monitor", 1, 280.0, "2025-05-05"),
-                (9, 8, "Laptop", 1, 1300.0, "2025-05-10"),
-                (12, 11, "Monitor", 2, 290.0, "2025-07-01"),
-                (13, 12, "Laptop", 1, 1250.0, "2025-07-10"),
+                (1, 1, "Laptop", 1, 1200.0, to_date("2025-01-01")),
+                (4, 1, "Monitor", 2, 300.0, to_date("2025-03-15")),
+                (5, 4, "Laptop", 1, 1100.0, to_date("2025-03-20")),
+                (8, 7, "Monitor", 1, 280.0, to_date("2025-05-05")),
+                (9, 8, "Laptop", 1, 1300.0, to_date("2025-05-10")),
+                (12, 11, "Monitor", 2, 290.0, to_date("2025-07-01")),
+                (13, 12, "Laptop", 1, 1250.0, to_date("2025-07-10")),
             ],
         ),
     ),
@@ -212,13 +213,13 @@ TEST_QUERIES = [
         to_rows(
             ("order_id", "user_id", "product", "quantity", "price", "order_date"),
             [
-                (4, 1, "Monitor", 2, 300.0, "2025-03-15"),
-                (5, 4, "Laptop", 1, 1100.0, "2025-03-20"),
-                (6, 5, "Mouse", 1, 30.0, "2025-04-01"),
-                (7, 6, "Keyboard", 2, 50.0, "2025-04-10"),
-                (8, 7, "Monitor", 1, 280.0, "2025-05-05"),
-                (9, 8, "Laptop", 1, 1300.0, "2025-05-10"),
-                (10, 9, "Mouse", 3, 27.0, "2025-06-01"),
+                (4, 1, "Monitor", 2, 300.0, to_date("2025-03-15")),
+                (5, 4, "Laptop", 1, 1100.0, to_date("2025-03-20")),
+                (6, 5, "Mouse", 1, 30.0, to_date("2025-04-01")),
+                (7, 6, "Keyboard", 2, 50.0, to_date("2025-04-10")),
+                (8, 7, "Monitor", 1, 280.0, to_date("2025-05-05")),
+                (9, 8, "Laptop", 1, 1300.0, to_date("2025-05-10")),
+                (10, 9, "Mouse", 3, 27.0, to_date("2025-06-01")),
             ],
         ),
     ),
@@ -227,10 +228,10 @@ TEST_QUERIES = [
         to_rows(
             ("order_id", "user_id", "product", "quantity", "price", "order_date"),
             [
-                (1, 1, "Laptop", 1, 1200.0, "2025-01-01"),
-                (5, 4, "Laptop", 1, 1100.0, "2025-03-20"),
-                (9, 8, "Laptop", 1, 1300.0, "2025-05-10"),
-                (13, 12, "Laptop", 1, 1250.0, "2025-07-10"),
+                (1, 1, "Laptop", 1, 1200.0, to_date("2025-01-01")),
+                (5, 4, "Laptop", 1, 1100.0, to_date("2025-03-20")),
+                (9, 8, "Laptop", 1, 1300.0, to_date("2025-05-10")),
+                (13, 12, "Laptop", 1, 1250.0, to_date("2025-07-10")),
             ],
         ),
     ),
@@ -379,14 +380,14 @@ TEST_QUERIES = [
         to_rows(
             ("first_name", "product", "order_date"),
             [
-                ("Hank", "Laptop", "2025-05-10"),
-                ("Grace", "Monitor", "2025-05-05"),
-                ("Ivy", "Mouse", "2025-06-01"),
-                ("Jack", "Keyboard", "2025-06-15"),
-                ("Kate", "Monitor", "2025-07-01"),
-                ("Leo", "Laptop", "2025-07-10"),
-                ("Mia", "Mouse", "2025-07-15"),
-                ("Nick", "Keyboard", "2025-08-01"),
+                ("Hank", "Laptop", to_date("2025-05-10")),
+                ("Grace", "Monitor", to_date("2025-05-05")),
+                ("Ivy", "Mouse", to_date("2025-06-01")),
+                ("Jack", "Keyboard", to_date("2025-06-15")),
+                ("Kate", "Monitor", to_date("2025-07-01")),
+                ("Leo", "Laptop", to_date("2025-07-10")),
+                ("Mia", "Mouse", to_date("2025-07-15")),
+                ("Nick", "Keyboard", to_date("2025-08-01")),
             ],
         ),
     ),

@@ -10,7 +10,7 @@ from tabulate import tabulate
 from .constants import DEBUG_EXECUTION
 from .io import BlockFile
 from .jobs import Job, JobResult, JoinJob, LoadShuffleFilesJob, OutputFile, ScanJob
-from .sql import AggCol, BinaryOperatorColumn, Col
+from .sql import AggCol, Col
 from .tasks import (
     AggregateTask,
     BroadcastHashJoinTask,

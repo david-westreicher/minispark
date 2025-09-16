@@ -3,6 +3,7 @@ from __future__ import annotations
 import operator
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .constants import ColumnType, ColumnTypePython, Schema
@@ -65,6 +66,9 @@ class Col:
 
     def like(self, pattern: str) -> Col:
         return LikeColumn(self, pattern)
+
+    def between(self, start: Col | ColumnTypePython, end: Col | ColumnTypePython) -> Col:
+        return (start <= self) & (self <= end)
 
     def execute_row(self, row: tuple[ColumnTypePython, ...]) -> ColumnTypePython:
         raise NotImplementedError
@@ -283,6 +287,14 @@ class BinaryOperatorColumn(Col):
             self.left_type_convert_to = output_type if convert_left else None
             self.right_type_convert_to = output_type if convert_right else None
             return output_type
+        if left_type == ColumnType.STRING and right_type == ColumnType.TIMESTAMP:
+            assert type(self.left_side) is Lit
+            self.left_side.value = datetime.fromisoformat(str(self.left_side.value))
+            left_type = ColumnType.TIMESTAMP
+        if right_type == ColumnType.STRING and left_type == ColumnType.TIMESTAMP:
+            assert type(self.right_side) is Lit
+            self.right_side.value = datetime.fromisoformat(str(self.right_side.value))
+            right_type = ColumnType.TIMESTAMP
         if left_type != right_type:
             raise TypeError(
                 f"Type mismatch in binary operation: {left_type} {self.operator} {right_type}",

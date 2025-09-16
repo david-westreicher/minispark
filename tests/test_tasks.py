@@ -136,7 +136,7 @@ def test_schema_propagation_load_shuffle_file_task():
 
 def test_schema_propagation_filter_task():
     # arrange
-    test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
+    test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.INTEGER)]
     task = FilterTask(
         LoadTableBlockTask(VoidTask(), file_path=Path()),
         condition=Col("a") > Col("b"),
@@ -155,7 +155,7 @@ def test_schema_propagation_filter_task():
 
 def test_schema_propagation_filter_task_fails():
     # arrange
-    test_table_schema = [("a", ColumnType.INTEGER), ("b", ColumnType.STRING)]
+    test_table_schema = [("a", ColumnType.INTEGER)]
     task = FilterTask(
         LoadTableBlockTask(VoidTask(), file_path=Path()),
         condition=Col("c") > Lit(5),
@@ -168,7 +168,7 @@ def test_schema_propagation_filter_task_fails():
             "file_schema",
             property(lambda _: test_table_schema),
         ),
-        pytest.raises(ValueError, match="Unknown columns in Filter"),
+        pytest.raises(ValueError, match=r'Column "c" not found in schema'),
     ):
         task.validate_schema()
 

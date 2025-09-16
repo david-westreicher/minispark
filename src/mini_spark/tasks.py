@@ -178,11 +178,7 @@ class FilterTask(ConsumerTask):
 
     def validate_schema(self) -> Schema:
         schema = self.parent_task.validate_schema()
-        referenced_column_names = [col.name for col in self.condition.all_nested_columns if type(col) is Col]
-        schema_cols = {col_name for col_name, _ in schema}
-        unknown_cols = [col for col in referenced_column_names if col not in schema_cols]
-        if unknown_cols:
-            raise ValueError(f"Unknown columns in Filter: {unknown_cols}")
+        self.condition.infer_type(schema)
         return schema
 
     def explain(self, lvl: int = 0) -> None:
