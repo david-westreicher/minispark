@@ -332,7 +332,7 @@ pub fn {{ stage.function_name }}(allocator: std.mem.Allocator, job: Job) !void {
         .{ .typ = Executor.TYPE_{{col_type.zig_type.upper()}}, .name = "{{col_name}}" },
         //{%- endfor %}
     })[0..] };
-    var producer = try Executor.JoinProducer2({{stage.producer.left_key.zig_type}}).init(
+    var producer = try Executor.JoinProducer({{stage.producer.left_key.zig_type}}).init(
         allocator,
         job.shuffle_files orelse @panic("input file not set"),
         {{stage.producer.left_key.function_name}},
