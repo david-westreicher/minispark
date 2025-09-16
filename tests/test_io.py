@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ def test_serialize_deserialize_schema(temporary_file: Path):
         ("int_col", ColumnType.INTEGER),
         ("str_col", ColumnType.STRING),
         ("float_col", ColumnType.FLOAT),
+        ("timestamp_col", ColumnType.TIMESTAMP),
     ]
 
     # act
@@ -28,8 +30,8 @@ def test_serialize_deserialize_schema(temporary_file: Path):
 def test_serialize_deserialize_data(temporary_file: Path):
     # arrange
     rows: list[Row] = [
-        {"int_col": 1, "str_col": "1", "float_col": 1.0},
-        {"int_col": 2, "str_col": "2", "float_col": 2.0},
+        {"int_col": 1, "str_col": "1", "float_col": 1.0, "timestamp_col": datetime(2025, 1, 1)},
+        {"int_col": 2, "str_col": "2", "float_col": 2.0, "timestamp_col": datetime(2025, 1, 2)},
     ]
 
     # act

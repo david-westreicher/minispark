@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
@@ -18,6 +19,7 @@ class ColumnType(Enum):
     INTEGER = (0, int)
     STRING = (1, str)
     FLOAT = (2, float)
+    TIMESTAMP = (3, int)
     UNKNOWN = (255, type(None))
 
     def __init__(self, value: int, py_type: type) -> None:
@@ -39,6 +41,8 @@ class ColumnType(Enum):
             return ColumnType.STRING
         if type(value) is float:
             return ColumnType.FLOAT
+        if type(value) is datetime:
+            return ColumnType.TIMESTAMP
         return ColumnType.UNKNOWN
 
     @property
@@ -49,6 +53,8 @@ class ColumnType(Enum):
             return "[]const u8"
         if self == ColumnType.FLOAT:
             return "f32"
+        if self == ColumnType.TIMESTAMP:
+            return "i64"
         raise NotImplementedError(self)
 
     @property
@@ -59,6 +65,8 @@ class ColumnType(Enum):
             return "Str"
         if self == ColumnType.FLOAT:
             return "F32"
+        if self == ColumnType.TIMESTAMP:
+            return "I64"
         raise NotImplementedError(self)
 
     def __str__(self) -> str:
@@ -68,7 +76,7 @@ class ColumnType(Enum):
         return self.__str__()
 
 
-ColumnTypePython = int | float | str
+ColumnTypePython = int | float | str | datetime
 NumericColumnTypes = {int, float}
 Row = dict[str, ColumnTypePython]
 Columns = tuple[list[ColumnTypePython], ...]

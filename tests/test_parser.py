@@ -391,3 +391,24 @@ def test_join_alias():
         )
     )
     assert df.task == expected_df.task
+
+
+def test_between():
+    # arrange
+    sql = """
+        SELECT * FROM 'table' WHERE col_1 BETWEEN col_2 AND col_3;
+    """
+
+    # act
+    df = parse_sql(sql)
+
+    # assert
+    expected_df = (
+        DataFrame()
+        .table("table")
+        .filter((Col("col_2") <= Col("col_1")) & (Col("col_1") <= Col("col_3")))
+        .select(
+            Col("*"),
+        )
+    )
+    assert df.task == expected_df.task

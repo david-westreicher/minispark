@@ -35,7 +35,9 @@ sql_grammar = Grammar(
     or_expr          = and_expr (ws "OR" ws and_expr)*
     and_expr         = not_expr (ws "AND" ws not_expr)*
     not_expr         = ("NOT" ws)? predicate
-    predicate        = comparison / parenthised_condition / string_literal / like
+    predicate        = comparison / parenthised_condition / string_literal / between / like
+    between          = column_name ws "BETWEEN" ws timestamp ws "AND" ws timestamp
+    timestamp        = string_literal / column_name
     like             = expr ws "LIKE" ws string_literal
     parenthised_condition = "(" ws? condition ws? ")"
     comparison       = expr ws? comparator ws? expr
@@ -94,6 +96,7 @@ ParenthisedConditionType = tuple[Any, Any, Col, Any, Any]
 AtomType = tuple[Col]
 TableReferenceType = tuple[DataFrame, list[str] | Node]
 LikeType = tuple[Col, Any, Any, Any, str]
+BetweenType = tuple[Col, Any, Any, Any, Col, Any, Any, Any, Col]
 
 
 class SemanticError(Exception):
@@ -284,6 +287,10 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
         col, _, _, _, pattern = visited_children
         return col.like(pattern)
 
+    def visit_between(self, node: Node, visited_children: BetweenType) -> Col:  # noqa: ARG002
+        col, _, _, _, start, _, _, _, end = visited_children
+        return col.between(start, end)
+
     def visit_comparison(self, node: Node, visited_children: ComparisonType) -> Col:  # noqa: ARG002
         left, _, comparator, _, right = visited_children
         return comparator(left, right)
@@ -333,6 +340,9 @@ class SQLVisitor(NodeVisitor):  # type:ignore[misc]
         return identifier
 
     def visit_value(self, node: Node, visited_children: list[ColumnTypePython]) -> ColumnTypePython:  # noqa: ARG002
+        return visited_children[0]
+
+    def visit_timestamp(self, node: Node, visited_children: list[ColumnTypePython]) -> ColumnTypePython:  # noqa: ARG002
         return visited_children[0]
 
     def visit_string_literal(self, node: Node, visited_children: list[Any]) -> str:  # noqa: ARG002

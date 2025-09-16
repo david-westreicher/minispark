@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import struct
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
 
@@ -24,6 +25,14 @@ def to_unsigned_int(value: int) -> bytes:
 
 def read_unsigned_int(f: BinaryIO) -> int:
     return int.from_bytes(f.read(4), byteorder="little", signed=False)
+
+
+def datetime_to_timestamp(dt: datetime) -> int:
+    return int(dt.timestamp() * 1_000_000)
+
+
+def timestamp_to_datetime(microseconds_since_epoch: int) -> datetime:
+    return datetime.fromtimestamp(microseconds_since_epoch / 1_000_000)
 
 
 def encode_string(text: str) -> bytes:
@@ -59,7 +68,7 @@ def _deserialize_schema(f: BinaryIO) -> Schema:
 
 
 @trace_yield("serialize blocks")
-def _generate_data_blocks_for_columns(
+def _generate_data_blocks_for_columns(  # noqa: C901
     schema: Schema,
     columns: Columns,
 ) -> Iterable[bytes]:
@@ -80,17 +89,24 @@ def _generate_data_blocks_for_columns(
                 for val in block_data:
                     assert type(val) is float
                     col_data.extend(struct.pack("<f", val))
+            elif col_type == ColumnType.TIMESTAMP:
+                for val in block_data:
+                    date_val = datetime.fromisoformat(val) if type(val) is str else val
+                    assert type(date_val) is datetime
+                    col_data.extend(struct.pack("<q", datetime_to_timestamp(date_val)))
             elif col_type == ColumnType.STRING:
                 col_data.extend(len(str(val)) & 0xFF for val in block_data)
                 for val in block_data:
                     assert type(val) is str
                     col_data.extend(val.encode("utf-8"))
+            else:
+                raise ValueError(f"Unsupported column type {col_type}")
             block_bytes.extend(to_unsigned_int(len(col_data)))
             block_bytes.extend(col_data)
         yield bytes(block_bytes)
 
 
-def _deserialize_block_column(
+def _deserialize_block_column(  # noqa: C901, PLR0912
     f: BinaryIO,
     column_name: str,
     schema: Schema,
@@ -116,6 +132,11 @@ def _deserialize_block_column(
         while rows_read < block_rows:
             float_value = struct.unpack("<f", f.read(4))[0]
             curr_chunk.append(float_value)
+            rows_read += 1
+    elif col_type == ColumnType.TIMESTAMP:
+        while rows_read < block_rows:
+            int_value = struct.unpack("<q", f.read(8))[0]
+            curr_chunk.append(timestamp_to_datetime(int_value))
             rows_read += 1
     elif col_type == ColumnType.STRING:
         str_lengths = [int(f.read(1)[0]) for _ in range(block_rows)]

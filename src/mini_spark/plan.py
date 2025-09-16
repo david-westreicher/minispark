@@ -10,7 +10,7 @@ from tabulate import tabulate
 from .constants import DEBUG_EXECUTION
 from .io import BlockFile
 from .jobs import Job, JobResult, JoinJob, LoadShuffleFilesJob, OutputFile, ScanJob
-from .sql import AggCol, BinaryOperatorColumn, Col
+from .sql import AggCol, Col
 from .tasks import (
     AggregateTask,
     BroadcastHashJoinTask,
@@ -184,10 +184,6 @@ class PhysicalPlan:
             return task
         task.parent_task = PhysicalPlan.expand_tasks(task.parent_task)
         if type(task) is BroadcastHashJoinTask:
-            # TODO(david): decompose join_condition: distribute the right keys to right shuffle task
-            assert type(task.join_condition) is BinaryOperatorColumn
-            task.left_key = task.join_condition.left_side
-            task.right_key = task.join_condition.right_side
             task.right_side_task = PhysicalPlan.expand_tasks(task.right_side_task)
             task.parent_task = WriteToShufflePartitions(task.parent_task, key_column=task.left_key)
             task.right_side_task = WriteToShufflePartitions(task.right_side_task, key_column=task.right_key)
@@ -229,6 +225,7 @@ class PhysicalPlan:
     @trace("Physical Plan Generation")
     def generate_physical_plan(full_task: Task) -> PhysicalPlan:
         full_task = WriteToLocalFileTask(full_task)
+        PhysicalPlan.infer_schema(full_task)
         full_task = PhysicalPlan.expand_tasks(full_task)
         PhysicalPlan.infer_schema(full_task)
         PhysicalPlan.cleanup_output_column_names(full_task)
