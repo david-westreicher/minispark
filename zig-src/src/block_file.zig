@@ -6,6 +6,7 @@ pub const ROWS_PER_BLOCK = 2 * 1024 * 1024;
 pub const TYPE_I32: u8 = 0;
 pub const TYPE_STR: u8 = 1;
 pub const TYPE_F32: u8 = 2;
+pub const TYPE_I64: u8 = 3;
 pub const Error = error{
     NameTooLong,
     StringTooLong,
@@ -140,6 +141,7 @@ pub const StringColumn = struct {
 
 pub const ColumnData = union(enum) {
     I32: []const i32,
+    I64: []const i64,
     F32: []const f32,
     Str: StringColumn,
 
@@ -150,6 +152,12 @@ pub const ColumnData = union(enum) {
             .I32 => |vals| {
                 const values = vals[start..fini];
                 const col_len: u32 = @intCast(values.len * 4);
+                try writer.interface.writeAll(std.mem.asBytes(&col_len));
+                try writer.interface.writeAll(std.mem.sliceAsBytes(values));
+            },
+            .I64 => |vals| {
+                const values = vals[start..fini];
+                const col_len: u32 = @intCast(values.len * 8);
                 try writer.interface.writeAll(std.mem.asBytes(&col_len));
                 try writer.interface.writeAll(std.mem.sliceAsBytes(values));
             },
@@ -194,6 +202,7 @@ pub const ColumnData = union(enum) {
     pub fn len(self: ColumnData) usize {
         return switch (self) {
             .I32 => |vals| vals.len,
+            .I64 => |vals| vals.len,
             .F32 => |vals| vals.len,
             .Str => |vals| vals.slices.len,
         };
@@ -202,6 +211,7 @@ pub const ColumnData = union(enum) {
     pub fn deinit(self: *ColumnData, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .I32 => |vals| allocator.free(vals),
+            .I64 => |vals| allocator.free(vals),
             .F32 => |vals| allocator.free(vals),
             .Str => |*vals| vals.deinit(allocator),
         }
@@ -214,6 +224,11 @@ pub const ColumnData = union(enum) {
                 const vals = try allocator.alloc(i32, row_count);
                 try reader.interface.readSliceAll(std.mem.sliceAsBytes(vals));
                 return ColumnData{ .I32 = vals };
+            },
+            TYPE_I64 => {
+                const vals = try allocator.alloc(i64, row_count);
+                try reader.interface.readSliceAll(std.mem.sliceAsBytes(vals));
+                return ColumnData{ .I64 = vals };
             },
             TYPE_F32 => {
                 const vals = try allocator.alloc(f32, row_count);
@@ -299,6 +314,13 @@ pub const Block = struct {
                     @memcpy(new_vals[0..vals.len], vals);
                     @memcpy(new_vals[vals.len..], other_vals);
                     merged_cols[col_idx] = ColumnData{ .I32 = new_vals };
+                },
+                .I64 => |vals| {
+                    const other_vals = col_right.I64;
+                    const new_vals = try allocator.alloc(i64, vals.len + other_vals.len);
+                    @memcpy(new_vals[0..vals.len], vals);
+                    @memcpy(new_vals[vals.len..], other_vals);
+                    merged_cols[col_idx] = ColumnData{ .I64 = new_vals };
                 },
                 .F32 => |vals| {
                     const other_vals = col_right.F32;
