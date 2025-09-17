@@ -244,6 +244,83 @@ You read it from the bottom up, indentations indicate data flow, the `:none` at 
 - The `Project` task selects the final columns to return
 
 
+### 4) Physical Plan
+
+The logical plan is converted into a Physical Plan.
+A physical plan consists of multiple stages that will be executed one after the other.
+Each stage is a *chunk* pipeline, starting with a *Producer*, leading to *Consumers* and ending with a *Writer*.
+Each pipeline can be run in parallel (by threads or in a distributed fashion).
+Each worker has a dedicated folder to write its shuffle files to.
+This plan now also contains schema information from the source tables and their propagated schemas.
+
+```python
+# Stage 0
+ WriteToShufflePartitions(u.user_id)
+  schema = [u.user_id:INTEGER, u.first_name:STRING, u.last_name:STRING, u.age:INTEGER, u.country:STRING]
+  +-  LoadTableBlockTask(users)
+       schema = [u.user_id:INTEGER, u.first_name:STRING, u.last_name:STRING, u.age:INTEGER, u.country:STRING]
+----------
+# Stage 1
+ WriteToShufflePartitions(o.user_id)
+  schema = [o.order_id:INTEGER, o.user_id:INTEGER, o.product:STRING, o.quantity:INTEGER, o.price:FLOAT, o.order_date:TIMESTAMP]
+  +-  LoadTableBlockTask(orders)
+       schema = [o.order_id:INTEGER, o.user_id:INTEGER, o.product:STRING, o.quantity:INTEGER, o.price:FLOAT, o.order_date:TIMESTAMP]
+----------
+# Stage 2
+ WriteToShufflePartitions(u.country)
+  schema = [u.country:STRING, orders_count:INTEGER, total_sales:FLOAT, _having_sum_o.quantity_mul_o.price:FLOAT]
+  +-  AggregateTask(group_by: u.country, agg: [...], before_shuffle:True)
+       schema = [u.country:STRING, orders_count:INTEGER, total_sales:FLOAT, _having_sum_o.quantity_mul_o.price:FLOAT]
+    +-  Join((u.user_id) == (o.user_id), "inner")
+         schema = [u.user_id:INTEGER, u.first_name:STRING, u.last_name:STRING, u.age:INTEGER, u.country:STRING,
+                   o.order_id:INTEGER, o.user_id:INTEGER, o.product:STRING, o.quantity:INTEGER, o.price:FLOAT, o.order_date:TIMESTAMP]
+----------
+# Stage 3
+ WriteToLocalFileTask():[country:STRING, orders_count:INTEGER, total_sales:FLOAT]
+  +-  Project((u.country) AS country, (orders_count) AS orders_count, (total_sales) AS total_sales)
+       schema = [country:STRING, orders_count:INTEGER, total_sales:FLOAT]
+    +-  Project(u.country, orders_count, total_sales)
+         schema = [u.country:STRING, orders_count:INTEGER, total_sales:FLOAT]
+      +-  Filter((_having_sum_o.quantity_mul_o.price) > (500))
+           schema = [u.country:STRING, orders_count:INTEGER, total_sales:FLOAT, _having_sum_o.quantity_mul_o.price:FLOAT]
+        +-  AggregateTask(group_by: u.country, agg: [...], before_shuffle:False)
+             schema = [u.country:STRING, orders_count:INTEGER, total_sales:FLOAT, _having_sum_o.quantity_mul_o.price:FLOAT]
+          +-  LoadShuffleFile()
+               schema = [u.country:STRING, orders_count:INTEGER, total_sales:FLOAT, _having_sum_o.quantity_mul_o.price:FLOAT]
+----------
+```
+
+
+- **Stage 0**: Load the `users` table and distribute rows into shuffle partitions `left.partition_i` based on `user_id` (the join key)
+- **Stage 1**: Load the `orders` table and distribute rows into shuffle partitions `right.partition_i` based on `user_id` (the join key)
+- **Stage 2**:
+    - Choose a partition `i`
+    - Load the shuffled data from the left side (read full `left.partition_i`)
+    - Load the shuffled data from the right side (read block by block from `right.partition_i`)
+    - perform the `JOIN` (using a hash join, with chunked data from the right side and emit the joined chunk)
+    - for each chunk do a local aggregation by `country` and write results to shuffle partitions `worker_j_agg_i` based on `country` (the group by key)
+-- **Stage 3**:
+    - Choose a partition `i`
+    - Read shuffle files from all workers `worker_x_agg_i` (chunk by chunk)
+    - Aggregate the data by `country` (final aggregation)
+    - Filter results based on the `HAVING` condition
+    - Project the final columns (notice that we remove the table alias names)
+    - Write the final results to a local file
+
+Notice that we do the aggregation twice. First we *pre-aggregate* the data so that the shuffle files are smaller. Then we do the final aggregation after the shuffle.
+
+### 5) Job Creation
+A job in **minispark** corresponds to running a stage. Depending on the execution engine, jobs can be run sequentially or in parallel.
+In our example the following jobs would be run:
+
+- **Stage 0**: Create a job for each partition of the `users` table, load the data and write to shuffle partitions based on `user_id` (block by block) **`ScanJob(file=..., block_id=...)`**
+- **Stage 1**: Create a job for each partition of the `orders` table, load the data and write to shuffle partitions based on `user_id` (block by block) **`ScanJob(file=..., block_id=...)`**
+- **Stage 2**: The *driver* collects the locations of shuffle partitions created in stages 0 and 1. Each partition `i` creates a job containing the shuffle files from the left side and the shuffle files from the right side (with the same partition number). **`JoinJob(left_shuffle_files=..., right_shuffle_files=..., parition=i)`**
+- **Stage 3**: The *driver* collects the list of shuffle partitions created in stage 2 and bundles them per partition `i` **`LoadShuffleFilesJob(files=..., partition=i)`**.
+- **Finally**: The *driver* collects the output files from stage 3 and streams them to the user (`collect` / `show`).
+
+### 6) Execution
+
 ## 📚 Why **minispark**?
 
 **minispark** is a **toy project** designed to:
