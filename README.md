@@ -1,6 +1,6 @@
 # ⚡ minispark ⚡
 A **minimal Spark-like query engine** built for learning and experimentation.  
-MiniSpark supports both SQL and a DataFrame API, with multiple execution backends — from a pure Python interpreter to a compiled Zig engine.
+**minispark** supports both SQL and a DataFrame API, with multiple execution backends — from a pure Python interpreter to a compiled Zig engine.
 
 ![Shell Demo](docs/shell.gif)
 
@@ -29,7 +29,7 @@ MiniSpark supports both SQL and a DataFrame API, with multiple execution backend
 
 ## 🔧 Installation  
 
-Clone the repo and install locally:  
+Clone the repo and install locally (use a virtual environment if desired).
 ```bash
 git clone https://github.com/david-westreicher/minispark.git
 cd minispark
@@ -38,7 +38,7 @@ pip install .
 
 ## 🧪 Running Tests  
 
-Run the test suite to ensure MiniSpark is working correctly.  
+Run the test suite to ensure **minispark** is working correctly.  
 ```bash
 pytest
 ```
@@ -48,7 +48,7 @@ pytest
 python -m mini_spark.shell
 ```
 
-MiniSpark comes with a lightweight interactive shell.  
+**minispark** comes with a lightweight interactive shell.  
 - Keeps **command history**  
 - Lets you **execute SQL queries** and see results immediately  
 
@@ -58,7 +58,7 @@ Example session output shows query results in a simple table format.
 
 ### Using the DataFrame API  
 
-MiniSpark supports [DataFrame](https://en.wikipedia.org/wiki/Apache_Spark#Spark_SQL) operations like filtering, grouping, counting, and applying conditions, similar to [PySpark](https://spark.apache.org/docs/latest/api/python/index.html). You can chain multiple transformations and display/collect the results. Check [the examples folder](examples/) for more example queries and scripts.
+**minispark** supports [DataFrame](https://en.wikipedia.org/wiki/Apache_Spark#Spark_SQL) operations like filtering, grouping, counting, and applying conditions, similar to [PySpark](https://spark.apache.org/docs/latest/api/python/index.html). You can chain multiple transformations and display/collect the results. Check [the examples folder](examples/) for more example queries and scripts.
 
 ```python
 from pathlib import Path
@@ -133,9 +133,58 @@ with PythonExecutionEngine() as engine:
 
 You can switch between engines by configuration when creating a session.  
 
-## 📚 Why MiniSpark?  
+## 🔬 Inner workings
 
-MiniSpark is a **toy project** designed to:  
+This section explains what happens inside **minispark** when you run a query — from text to final result.
+
+### 1) Start with some data and a query
+#### Users
+```bash
+╭───────────┬──────────────┬─────────────┬───────┬───────────╮
+│   user_id │ first_name   │ last_name   │   age │ country   │
+├───────────┼──────────────┼─────────────┼───────┼───────────┤
+│         1 │ Alice        │ Smith       │    25 │ USA       │
+│         2 │ Bob          │ Johnson     │    30 │ Canada    │
+│         3 │ Charlie      │ Brown       │    22 │ USA       │
+│         4 │ David        │ Wilson      │    35 │ UK        │
+│         5 │ Eva          │ Davis       │    28 │ Canada    │
+│         6 │ Frank        │ Miller      │    40 │ USA       │
+│         7 │ Grace        │ Taylor      │    27 │ UK        │
+│         8 │ Hank         │ Anderson    │    32 │ USA       │
+│         9 │ Ivy          │ Thomas      │    26 │ Canada    │
+│        10 │ Jack         │ Jackson     │    24 │ USA       │
+╰───────────┴──────────────┴─────────────┴───────┴───────────╯
+```
+#### Orders
+```bash
+╭────────────┬───────────┬───────────┬────────────┬─────────┬─────────────────────╮
+│   order_id │   user_id │ product   │   quantity │   price │ order_date          │
+├────────────┼───────────┼───────────┼────────────┼─────────┼─────────────────────┤
+│          1 │         1 │ Laptop    │          1 │    1200 │ 2025-01-01 00:00:00 │
+│          2 │         2 │ Mouse     │          2 │      25 │ 2025-01-05 00:00:00 │
+│          3 │         3 │ Keyboard  │          1 │      45 │ 2025-02-10 00:00:00 │
+│          4 │         1 │ Monitor   │          2 │     300 │ 2025-03-15 00:00:00 │
+│          5 │         4 │ Laptop    │          1 │    1100 │ 2025-03-20 00:00:00 │
+│          6 │         5 │ Mouse     │          1 │      30 │ 2025-04-01 00:00:00 │
+│          7 │         6 │ Keyboard  │          2 │      50 │ 2025-04-10 00:00:00 │
+│          8 │         7 │ Monitor   │          1 │     280 │ 2025-05-05 00:00:00 │
+│          9 │         8 │ Laptop    │          1 │    1300 │ 2025-05-10 00:00:00 │
+│         10 │         9 │ Mouse     │          3 │      27 │ 2025-06-01 00:00:00 │
+╰────────────┴───────────┴───────────┴────────────┴─────────┴─────────────────────╯
+```
+
+Example query (SQL):
+```sql
+SELECT u.country, COUNT() AS orders_count, SUM(o.quantity*o.price) AS total_sales
+FROM 'users' AS u
+    JOIN 'orders' AS o ON u.user_id=o.user_id
+GROUP BY u.country
+HAVING SUM(o.quantity*o.price) > 500;
+```
+
+## 📚 Why **minispark**?
+
+**minispark** is a **toy project** designed to:
 - Learn how query engines and Spark-like systems work internally  
 - Explore query compilation/planning and execution strategies 
 
