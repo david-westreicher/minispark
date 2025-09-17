@@ -53,31 +53,6 @@ Example session output shows query results in a simple table format.
 
 ## 🔍 Example Usage  
 
-### Using SQL  
-
-You can create a session, load data, register it as a temporary view, and run SQL queries with filters, aggregations, and groupings. The results can be displayed directly.  
-
-```python
-from mini_spark.dataframe import DataFrame
-from mini_spark.execution import PythonExecutionEngine, ThreadEngine
-
-query = """
-SELECT
-    left_table.fruit AS fruit_left,
-    left_table.color,
-    right_table.quantity
-FROM
-    some_database_file_bin AS left_table
-INNER JOIN
-    test_data AS right_table
-ON
-    left_table.fruit = right_table.fruit;
-"""
-
-with PythonExecutionEngine() as engine:
-    rows = engine.sql(query).collect()
-```
-
 ### Using the DataFrame API  
 
 MiniSpark supports [DataFrame](https://en.wikipedia.org/wiki/Apache_Spark#Spark_SQL) operations like filtering, grouping, counting, and applying conditions, similar to [PySpark](https://spark.apache.org/docs/latest/api/python/index.html). You can chain multiple transformations and display the results.  
@@ -123,6 +98,29 @@ with PythonExecutionEngine() as engine:
 │ banana  │           9.5 │
 │ orange  │          11.2 │
 ╰─────────┴───────────────╯
+```
+
+
+### Using SQL
+
+You can create a session, load data, register it as a temporary view, and run SQL queries with filters, aggregations, and groupings. The results can be displayed directly.
+
+```python
+from mini_spark.dataframe import DataFrame
+from mini_spark.execution import PythonExecutionEngine, ThreadEngine
+
+query = """
+SELECT
+    fruit,
+    SUM(quantity * price) AS total_price
+FROM
+    some_database_file.bin
+GROUP BY
+    fruit;
+"""
+
+with PythonExecutionEngine() as engine:
+    rows = engine.sql(query).collect()
 ```
 
 ## ⚡ Execution Engines  
