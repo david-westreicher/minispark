@@ -247,10 +247,8 @@ You read it from the bottom up, indentations indicate data flow, the `:none` at 
 ### 4) Physical Plan
 
 The logical plan is converted into a Physical Plan.
-A physical plan consists of multiple stages that will be executed one after the other.
-Each stage is a *chunk* pipeline, starting with a *Producer*, leading to *Consumers* and ending with a *Writer*.
-Each pipeline can be run in parallel (by threads or in a distributed fashion).
-Each worker has a dedicated folder to write its shuffle files to.
+A physical plan consists of multiple stages that will be executed one after the other (a barrier, where all workers need to wait until the stage is finished, to continue). Each stage will output one or more files that will be read by the next stage.
+Each worker has a dedicated folder to write its (output/shuffle) files to, so that they can safely run in parallel.
 This plan now also contains schema information from the source tables and their propagated schemas.
 
 ```python
@@ -294,13 +292,13 @@ This plan now also contains schema information from the source tables and their 
 - **Stage 0**: Load the `users` table and distribute rows into shuffle partitions `left.partition_i` based on `user_id` (the join key)
 - **Stage 1**: Load the `orders` table and distribute rows into shuffle partitions `right.partition_i` based on `user_id` (the join key)
 - **Stage 2**:
-    - Choose a partition `i`
+    - Choose a partition `i` based on the job (will be explained later)
     - Load the shuffled data from the left side (read full `left.partition_i`)
     - Load the shuffled data from the right side (read block by block from `right.partition_i`)
     - perform the `JOIN` (using a hash join, with chunked data from the right side and emit the joined chunk)
     - for each chunk do a local aggregation by `country` and write results to shuffle partitions `worker_j_agg_i` based on `country` (the group by key)
--- **Stage 3**:
-    - Choose a partition `i`
+- **Stage 3**:
+    - Choose a partition `i` based on the job (will be explained later)
     - Read shuffle files from all workers `worker_x_agg_i` (chunk by chunk)
     - Aggregate the data by `country` (final aggregation)
     - Filter results based on the `HAVING` condition
@@ -310,7 +308,7 @@ This plan now also contains schema information from the source tables and their 
 Notice that we do the aggregation twice. First we *pre-aggregate* the data so that the shuffle files are smaller. Then we do the final aggregation after the shuffle.
 
 ### 5) Job Creation
-A job in **minispark** corresponds to running a stage. Depending on the execution engine, jobs can be run sequentially or in parallel.
+A job in **minispark** corresponds to running a stage for one part of the input data. Depending on the execution engine, jobs can be run sequentially or in parallel.
 In our example the following jobs would be run:
 
 - **Stage 0**: Create a job for each partition of the `users` table, load the data and write to shuffle partitions based on `user_id` (block by block) **`ScanJob(file=..., block_id=...)`**
@@ -320,6 +318,69 @@ In our example the following jobs would be run:
 - **Finally**: The *driver* collects the output files from stage 3 and streams them to the user (`collect` / `show`).
 
 ### 6) Execution
+
+The execution engine takes care of running the jobs. Depending on the engine, jobs can be run sequentially (PythonEngine) or in parallel (ThreadPoolEngine).
+The *driver* coordinates the job creation (per stage), execution of the stages and collection of results.
+Each stage is a *block* pipeline, starting with a *Producer*, leading to *Consumers* and ending with a *Writer*.
+
+- Producer: `JoinTask`, `LoadTableBlockTask`, `LoadShuffleFile`
+- Consumers: `AggregateTask`, `Filter`, `Project`
+- Writer: `WriteToShufflePartitions`, `WriteToLocalFileTask`
+
+We try to chunk the data so that we don't run out of memory. The `AggregateTask` / `JoinTask` however, need to keeps an in-memory hash map of the full partition it processes (left-partition for the JoinTask).
+
+**Example of the Execution of Stage 2**
+
+#### Join produces the following table
+```bash
+╭─────────────┬────────────────┬───────────────┬─────────┬─────────────┬──────────────┬─────────────┬─────────────┬──────────────┬───────────┬─────────────────────╮
+│   u.user_id │ u.first_name   │ u.last_name   │   u.age │ u.country   │   o.order_id │   o.user_id │ o.product   │   o.quantity │   o.price │ o.order_date        │
+├─────────────┼────────────────┼───────────────┼─────────┼─────────────┼──────────────┼─────────────┼─────────────┼──────────────┼───────────┼─────────────────────┤
+│           1 │ Alice          │ Smith         │      25 │ USA         │            1 │           1 │ Laptop      │            1 │      1200 │ 2025-01-01 00:00:00 │
+│           2 │ Bob            │ Johnson       │      30 │ Canada      │            2 │           2 │ Mouse       │            2 │        25 │ 2025-01-05 00:00:00 │
+│           3 │ Charlie        │ Brown         │      22 │ USA         │            3 │           3 │ Keyboard    │            1 │        45 │ 2025-02-10 00:00:00 │
+│           1 │ Alice          │ Smith         │      25 │ USA         │            4 │           1 │ Monitor     │            2 │       300 │ 2025-03-15 00:00:00 │
+│           4 │ David          │ Wilson        │      35 │ UK          │            5 │           4 │ Laptop      │            1 │      1100 │ 2025-03-20 00:00:00 │
+│           5 │ Eva            │ Davis         │      28 │ Canada      │            6 │           5 │ Mouse       │            1 │        30 │ 2025-04-01 00:00:00 │
+│           6 │ Frank          │ Miller        │      40 │ USA         │            7 │           6 │ Keyboard    │            2 │        50 │ 2025-04-10 00:00:00 │
+│           7 │ Grace          │ Taylor        │      27 │ UK          │            8 │           7 │ Monitor     │            1 │       280 │ 2025-05-05 00:00:00 │
+│           8 │ Hank           │ Anderson      │      32 │ USA         │            9 │           8 │ Laptop      │            1 │      1300 │ 2025-05-10 00:00:00 │
+│           9 │ Ivy            │ Thomas        │      26 │ Canada      │           10 │           9 │ Mouse       │            3 │        27 │ 2025-06-01 00:00:00 │
+│          10 │ Jack           │ Jackson       │      24 │ USA         │           11 │          10 │ Keyboard    │            1 │        40 │ 2025-06-15 00:00:00 │
+│          11 │ Kate           │ White         │      29 │ UK          │           12 │          11 │ Monitor     │            2 │       290 │ 2025-07-01 00:00:00 │
+│          12 │ Leo            │ Harris        │      33 │ USA         │           13 │          12 │ Laptop      │            1 │      1250 │ 2025-07-10 00:00:00 │
+│          13 │ Mia            │ Martin        │      31 │ Canada      │           14 │          13 │ Mouse       │            2 │        26 │ 2025-07-15 00:00:00 │
+│          14 │ Nick           │ Thompson      │      23 │ UK          │           15 │          14 │ Keyboard    │            1 │        42 │ 2025-08-01 00:00:00 │
+╰─────────────┴────────────────┴───────────────┴─────────┴─────────────┴──────────────┴─────────────┴─────────────┴──────────────┴───────────┴─────────────────────╯
+```
+#### The Aggregate task groups by country and computes the aggregations
+```bash
+╭─────────────┬────────────────┬───────────────┬──────────────────────────────────────╮
+│ u.country   │   orders_count │   total_sales │   _having_sum_o.quantity_mul_o.price │
+├─────────────┼────────────────┼───────────────┼──────────────────────────────────────┤
+│ Canada      │              4 │           213 │                                  213 │
+│ UK          │              4 │          2002 │                                 2002 │
+│ USA         │              7 │          4535 │                                 4535 │
+╰─────────────┴────────────────┴───────────────┴──────────────────────────────────────╯
+```
+#### The filter task filters out countries with total sales <= 500
+```bash
+╭─────────────┬────────────────┬───────────────┬──────────────────────────────────────╮
+│ u.country   │   orders_count │   total_sales │   _having_sum_o.quantity_mul_o.price │
+├─────────────┼────────────────┼───────────────┼──────────────────────────────────────┤
+│ UK          │              4 │          2002 │                                 2002 │
+│ USA         │              7 │          4535 │                                 4535 │
+╰─────────────┴────────────────┴───────────────┴──────────────────────────────────────╯
+```
+#### The project task renames the columns
+```bash
+╭─────────────┬────────────────┬───────────────╮
+│ u.country   │   orders_count │   total_sales │
+├─────────────┼────────────────┼───────────────┤
+│ UK          │              4 │          2002 │
+│ USA         │              7 │          4535 │
+╰─────────────┴────────────────┴───────────────╯
+```
 
 ## 📚 Why **minispark**?
 
