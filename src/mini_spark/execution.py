@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from .constants import Row
+    from .dataframe import DataFrame
     from .tasks import Task
 
 
@@ -52,6 +53,13 @@ class ExecutionEngine(AbstractContextManager["ExecutionEngine"], ABC):
                 limit -= 1
                 if limit <= 0:
                     return
+
+    def sql(self, query: str) -> DataFrame:
+        from .parser import parse_sql  # noqa: PLC0415
+
+        df = parse_sql(query)
+        df.engine = self
+        return df
 
 
 class PythonExecutionEngine(ExecutionEngine):

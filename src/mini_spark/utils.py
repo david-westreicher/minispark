@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import csv
 import functools
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from multiprocessing import Queue
 from pathlib import Path
 from queue import Empty
@@ -13,7 +15,8 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import TrackEvent
 from perfetto.trace_builder.proto_builder import TracePacket, TraceProtoBuilder
 
-from .constants import GLOBAL_TEMP_FOLDER, Columns, Row, Schema
+from .constants import GLOBAL_TEMP_FOLDER, ROWS_PER_BLOCK, Columns, ColumnType, Row, Schema
+from .io import BlockFile
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -171,3 +174,30 @@ def chunk_list[T](lst: list[T], n_chunks: int) -> list[list[T]]:
         return []
     n = len(lst) // n_chunks
     return [lst[i : i + n] for i in range(0, len(lst), n)]
+
+
+def convert_csv_to_block_file(
+    csv_file: Path,
+    block_file: Path,
+    schema: Schema,
+    batch_size: int = ROWS_PER_BLOCK,
+) -> None:
+    if block_file.exists():
+        raise FileExistsError(f"File {block_file} already exists")
+    with csv_file.open() as f:
+        reader = csv.reader(f)
+        next(reader)  # Skip header
+        while True:
+            rows = []
+            for row_count, row in enumerate(reader):
+                out_row = []
+                for el, (_, col_type) in zip(row, schema, strict=True):
+                    out = datetime.fromisoformat(el) if col_type == ColumnType.TIMESTAMP else col_type.type(el)
+                    out_row.append(out)
+                rows.append(tuple(out_row))
+                if row_count >= batch_size:
+                    break
+            else:
+                BlockFile(block_file, schema).append_tuples(rows)
+                break
+            BlockFile(block_file, schema).append_tuples(rows)
