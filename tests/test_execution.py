@@ -47,6 +47,25 @@ def test_table_load(test_data: str, engine_factory: type[ExecutionEngine]):
 
 
 @pytest.mark.parametrize("engine_factory", ENGINES)
+def test_engine_sql(test_data: str, engine_factory: type[ExecutionEngine]):
+    # arrange
+    query = f"SELECT * FROM '{test_data}';"  # noqa: S608
+
+    # act
+    with engine_factory() as engine:
+        rows = engine.sql(query).collect()
+
+    # assert
+    assert rows == [
+        {"fruit": "apple", "quantity": 3, "color": "red"},
+        {"fruit": "banana", "quantity": 5, "color": "yellow"},
+        {"fruit": "orange", "quantity": 2, "color": "orange"},
+        {"fruit": "apple", "quantity": 4, "color": "green"},
+        {"fruit": "banana", "quantity": 7, "color": "yellow"},
+    ]
+
+
+@pytest.mark.parametrize("engine_factory", ENGINES)
 def test_select(test_data: str, engine_factory: type[ExecutionEngine]):
     # act
     with engine_factory() as engine:

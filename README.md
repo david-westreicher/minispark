@@ -135,6 +135,36 @@ with PythonExecutionEngine() as engine:
 
 You can switch between engines by configuration when creating a session.  
 
+## 🏃 Benchmark
+To test the implementation we use the [TCP-H](https://www.tpc.org/tpch/) benchmark. We run the benchmark with 4 worker threads. Here are the execution times for different scaling factors and the following query
+
+```sql
+SELECT
+    l_returnflag,
+    SUM(l_quantity)        AS sum_qty,
+    SUM(l_extendedprice)   AS sum_base_price,
+    SUM(l_extendedprice * (1 - l_discount))              AS sum_disc_price,
+    SUM(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge,
+    AVG(l_quantity)        AS avg_qty,
+    AVG(l_extendedprice)   AS avg_price,
+    AVG(l_discount)        AS avg_disc,
+    COUNT()               AS count_order
+FROM
+     lineitem
+WHERE
+    l_shipdate <= '1998-12-01'
+GROUP BY
+    l_returnflag;
+```
+
+
+| `lineitem` sf | CSV file size | Rows       | Average Execution Time|
+| ----------- | ------------: | ---------: | --------------------: |
+| 1           | 738 MB        |  6.001.215 |                0.707s |
+| 10          | 7.4 GB        | 59.986.052 |                3.372s |
+| 15          | 12.0 GB       | 89.987.373 |                4.874s |
+
+
 ## 📚 Why **minispark**?
 
 **minispark** is a **toy project** designed to:

@@ -1,3 +1,4 @@
+from itertools import islice
 from pathlib import Path
 
 from tabulate import tabulate
@@ -17,12 +18,7 @@ if __name__ == "__main__":
     )
     args = arg_parser.parse_args()
 
-    BlockFile(Path("some_test.bin")).write_rows(
-        [
-            {"delta": -1, "msg": "hello"},
-            {"delta": 2, "msg": "zig"},
-            {"delta": 3, "msg": "!"},
-        ],
-    )
-    rows = BlockFile(args.file_path).read_data_rows()
+    block_file = BlockFile(args.file_path)
+    print(f"Rows: {block_file.rows()}")  # noqa: T201
+    rows = list(islice(block_file.read_data_rows(), 100))
     print(tabulate(rows, tablefmt="rounded_outline", headers="keys"))  # noqa: T201

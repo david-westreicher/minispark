@@ -253,3 +253,7 @@ We try to chunk the data so that we don't run out of memory. The `AggregateTask`
 To speed up execution, the `ThreadPoolEngine` compiles the full plan to Zig code (via templating).
 This code is then compiled once and executed on a thread pool natively, leading to significant speedups.
 The communication between the Python threads and the native threads is done via files (shuffle files, output files) and `stdin`/`stdout` for jobs.
+
+Here is a trace of the TPC-H benchmark (query 1, with 4 worker threads).
+
+![Trace](trace.png)

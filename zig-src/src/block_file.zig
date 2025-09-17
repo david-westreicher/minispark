@@ -10,6 +10,8 @@ pub const ColumnType = enum(u8) {
     I64 = 3,
 };
 
+const BLOCK_START_BYTE_COUNT = 8;
+
 pub const Error = error{
     NameTooLong,
     StringTooLong,
@@ -154,25 +156,25 @@ pub const ColumnData = union(enum) {
         switch (self) {
             .I32 => |vals| {
                 const values = vals[start..fini];
-                const col_len: u32 = @intCast(values.len * 4);
+                const col_len: u64 = @intCast(values.len * 4);
                 try writer.interface.writeAll(std.mem.asBytes(&col_len));
                 try writer.interface.writeAll(std.mem.sliceAsBytes(values));
             },
             .I64 => |vals| {
                 const values = vals[start..fini];
-                const col_len: u32 = @intCast(values.len * 8);
+                const col_len: u64 = @intCast(values.len * 8);
                 try writer.interface.writeAll(std.mem.asBytes(&col_len));
                 try writer.interface.writeAll(std.mem.sliceAsBytes(values));
             },
             .F32 => |vals| {
                 const values = vals[start..fini];
-                const col_len: u32 = @intCast(values.len * 4);
+                const col_len: u64 = @intCast(values.len * 4);
                 try writer.interface.writeAll(std.mem.asBytes(&col_len));
                 try writer.interface.writeAll(std.mem.sliceAsBytes(values));
             },
             .Str => |vals| {
                 const values = vals.slices[start..fini];
-                var col_len: u32 = 0;
+                var col_len: u64 = 0;
                 for (values) |s| {
                     if (s.len > 255) {
                         return Error.StringTooLong;
@@ -221,7 +223,7 @@ pub const ColumnData = union(enum) {
     }
 
     pub fn readColumn(allocator: std.mem.Allocator, reader: *std.fs.File.Reader, typ: ColumnType, row_count: u32) !ColumnData {
-        _ = try reader.interface.takeInt(u32, .little);
+        _ = try reader.interface.takeInt(u64, .little); // columndata size in bytes
         switch (typ) {
             ColumnType.I32 => {
                 const vals = try allocator.alloc(i32, row_count);
@@ -276,8 +278,8 @@ pub const Block = struct {
         allocator.free(self.cols);
     }
 
-    pub fn write(self: Block, allocator: std.mem.Allocator, writer: *std.fs.File.Writer, block_starts: *std.ArrayList(u32)) !void {
-        var start: u32 = @intCast(writer.pos);
+    pub fn write(self: Block, allocator: std.mem.Allocator, writer: *std.fs.File.Writer, block_starts: *std.ArrayList(u64)) !void {
+        var start: u64 = @intCast(writer.pos);
         const row_count: u32 = @intCast(self.rows());
         try writer.interface.writeAll(std.mem.asBytes(&row_count));
         var offset: usize = 0;
@@ -292,7 +294,7 @@ pub const Block = struct {
         return;
     }
 
-    pub fn readBlock(allocator: std.mem.Allocator, reader: *std.fs.File.Reader, block_start: u32, schema: Schema) !Block {
+    pub fn readBlock(allocator: std.mem.Allocator, reader: *std.fs.File.Reader, block_start: u64, schema: Schema) !Block {
         try reader.seekTo(@intCast(block_start));
         const row_count = try reader.interface.takeInt(u32, .little);
         var columns = try allocator.alloc(ColumnData, schema.columns.len);
@@ -363,14 +365,14 @@ pub const BlockFile = struct {
     allocator: std.mem.Allocator,
     file_path: []const u8,
     schema: Schema,
-    block_starts: std.ArrayList(u32),
+    block_starts: std.ArrayList(u64),
 
     pub fn init(allocator: std.mem.Allocator, schema: Schema, file_path: []const u8) !BlockFile {
         return BlockFile{
             .allocator = allocator,
             .file_path = try allocator.dupe(u8, file_path),
             .schema = try schema.clone(allocator),
-            .block_starts = try std.ArrayList(u32).initCapacity(allocator, 100),
+            .block_starts = try std.ArrayList(u64).initCapacity(allocator, 100),
         };
     }
 
@@ -441,7 +443,7 @@ pub const BlockFile = struct {
             const seek_pos: u64 = @intCast(self.block_starts.pop() orelse @panic("no block to pop"));
             try writer.seekTo(seek_pos);
         } else {
-            const seek_pos: u64 = try file.getEndPos() - 4 * (self.block_starts.items.len + 1);
+            const seek_pos: u64 = try file.getEndPos() - BLOCK_START_BYTE_COUNT * (self.block_starts.items.len) - 4;
             try writer.seekTo(seek_pos); // right after last block
         }
         try block_to_append.write(allocator, &writer, &self.block_starts);
@@ -463,17 +465,18 @@ pub const BlockFile = struct {
         return;
     }
 
-    fn readBlockStarts(allocator: std.mem.Allocator, reader: *std.fs.File.Reader) !std.ArrayList(u32) {
+    fn readBlockStarts(allocator: std.mem.Allocator, reader: *std.fs.File.Reader) !std.ArrayList(u64) {
         const file_size = try reader.getSize();
         try reader.seekTo(file_size - 4);
         const block_count = try reader.interface.takeInt(u32, .little);
-        const footer_size = 4 + (block_count * 4);
+        const footer_size = 4 + (block_count * BLOCK_START_BYTE_COUNT);
         try reader.seekTo(file_size - footer_size);
 
-        var starts = try std.ArrayList(u32).initCapacity(allocator, block_count);
+        var starts = try std.ArrayList(u64).initCapacity(allocator, block_count);
         for (0..block_count) |_| {
-            const off = try reader.interface.takeInt(u32, .little);
+            const off = try reader.interface.takeInt(u64, .little);
             try starts.append(allocator, off);
+            //std.debug.print("start {d}\n", .{off});
         }
         return starts;
     }
