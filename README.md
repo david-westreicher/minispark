@@ -1,6 +1,6 @@
 # ⚡ minispark ⚡
 A **minimal Spark-like query engine** built for learning and experimentation.  
-MiniSpark supports both SQL and a DataFrame API, with multiple execution backends — from a pure Python interpreter to a compiled Zig engine.  
+MiniSpark supports both SQL and a DataFrame API, with multiple execution backends — from a pure Python interpreter to a compiled Zig engine.
 
 ## ✨ Features  
 
@@ -17,6 +17,7 @@ MiniSpark supports both SQL and a DataFrame API, with multiple execution backend
   - 🐍 **PythonEngine**: reference implementation (interpreted, slower)  
   - ⚡ **ThreadPoolEngine**: compiles queries to Zig and executes natively  
 - **Shuffle stages** for distributed-style `GROUP BY` and `JOIN`  
+- **Tracing** to debug performance issues (Visualization with [perfetto](https://perfetto.dev/))
 
 ## 📦 Dependencies  
 
@@ -79,25 +80,49 @@ with PythonExecutionEngine() as engine:
 
 ### Using the DataFrame API  
 
-MiniSpark supports [DataFrame](https://en.wikipedia.org/wiki/Apache_Spark#Spark_SQL) operations like filtering, grouping, counting, and applying conditions, similar to PySpark. You can chain multiple transformations and display the results.  
+MiniSpark supports [DataFrame](https://en.wikipedia.org/wiki/Apache_Spark#Spark_SQL) operations like filtering, grouping, counting, and applying conditions, similar to [PySpark](https://spark.apache.org/docs/latest/api/python/index.html). You can chain multiple transformations and display the results.  
 
 ```python
-from mini_spark.dataframe import DataFrame
-from mini_spark.execution import PythonExecutionEngine, ThreadEngine
-from mini_spark.sql import Col
+from pathlib import Path
 
+from mini_spark.constants import Row
+from mini_spark.dataframe import DataFrame
+from mini_spark.execution import PythonExecutionEngine
+from mini_spark.io import BlockFile
+from mini_spark.sql import Col
+from mini_spark.sql import Functions as F  # noqa: N817
+
+# create a test table
+test_table = Path("some_database_file.bin")
+test_data: list[Row] = [
+    {"fruit": "apple", "quantity": 3, "color": "red", "price": 1.5},
+    {"fruit": "banana", "quantity": 5, "color": "yellow", "price": 1.9},
+    {"fruit": "orange", "quantity": 2, "color": "orange", "price": 1.2},
+    {"fruit": "orange", "quantity": 4, "color": "orange", "price": 2.2},
+]
+BlockFile(Path(test_table)).write_rows(test_data)
+
+
+# calculate total price per fruit
 with PythonExecutionEngine() as engine:
     rows = (
         DataFrame(engine)
-        .table("some_database_file.bin")
-        .select(Col("fruit").alias("fruit_left"), Col("color"))
-        .join(
-            DataFrame().table(test_data).select(Col("fruit").alias("fruit_right"), Col("quantity")),
-            on=Col("fruit_left") == Col("fruit_right"),
-            how="inner",
-        )
-        .collect()
+        .table(str(test_table))
+        .group_by(Col("fruit"))
+        .agg(F.sum(Col("quantity") * Col("price")).alias("total_price"))
+        .show()
     )
+```
+
+**Output**
+```bash
+╭─────────┬───────────────╮
+│ fruit   │   total_price │
+├─────────┼───────────────┤
+│ apple   │           4.5 │
+│ banana  │           9.5 │
+│ orange  │          11.2 │
+╰─────────┴───────────────╯
 ```
 
 ## ⚡ Execution Engines  
