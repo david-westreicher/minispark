@@ -1,16 +1,26 @@
 const std = @import("std");
 const Regex = @import("regex").Regex;
+
+const Block = @import("executor").block_file.Block;
+const BlockFile = @import("executor").block_file.BlockFile;
+const ColumnData = @import("executor").block_file.ColumnData;
+const ColumnSchema = @import("executor").block_file.ColumnSchema;
+const ColumnType = @import("executor").block_file.ColumnType;
+const Schema = @import("executor").block_file.Schema;
+const StringColumn = @import("executor").block_file.StringColumn;
+
+const task_utils = @import("executor").task_utils;
+const JoinProducer = @import("executor").tasks.JoinProducer;
+const TaskResult = @import("executor").tasks.TaskResult;
+const LoadShuffleFilesProducer = @import("executor").tasks.LoadShuffleFilesProducer;
+const LoadTableBlockProducer = @import("executor").tasks.LoadTableBlockProducer;
+
+const concatStrings = @import("executor").utils.concatStrings;
+const Job = @import("executor").job.Job;
+const OutputFile = @import("executor").job.OutputFile;
+
 const Executor = @import("executor");
-const ColumnData = @import("executor").ColumnData;
-const ColumnSchema = @import("executor").ColumnSchema;
-const Block = @import("executor").Block;
-const Schema = @import("executor").Schema;
-const StringColumn = @import("executor").StringColumn;
-const concatStrings = @import("executor").concatStrings;
-const Job = @import("executor").Job;
-const Tracer = @import("executor").GLOBAL_TRACER;
-const OutputFile = @import("executor").OutputFile;
-const PARTITIONS = Executor.PARTITIONS;
+const PARTITIONS = @import("executor").PARTITIONS;
 
 // ###### Map Entries
 //{%- for stage in plan.stages %}
@@ -100,7 +110,7 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
     //{%- for consumer in stage.consumers -%}
 
         //{%- if consumer.is_select %}
-        pub fn {{consumer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult) !Executor.TaskResult {
+        pub fn {{consumer.function_name}}(allocator: std.mem.Allocator, input: TaskResult) !TaskResult {
             const block = input.chunk orelse return .{ .is_last = input.is_last };
             try Executor.GLOBAL_TRACER.startEvent("{{consumer.function_name}}");
             const rows = block.rows();
@@ -117,7 +127,7 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
         //{%- endif %}
 
         //{%- if consumer.is_filter %}
-        pub fn {{consumer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult) !Executor.TaskResult {
+        pub fn {{consumer.function_name}}(allocator: std.mem.Allocator, input: TaskResult) !TaskResult {
             const block = input.chunk orelse return .{ .is_last = input.is_last };
             try Executor.GLOBAL_TRACER.startEvent("{{consumer.condition.function_name}}");
             const rows = block.rows();
@@ -129,7 +139,7 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
             }
             const slice: []ColumnData = try allocator.alloc(ColumnData, block.cols.len);
             for (block.cols, 0..) |col, col_idx| {
-                const filtered_column = try Executor.filter_column(col, condition_col, output_rows, allocator);
+                const filtered_column = try task_utils.filter_column(col, condition_col, output_rows, allocator);
                 slice[col_idx] = filtered_column;
             }
             try Executor.GLOBAL_TRACER.endEvent("{{consumer.condition.function_name}}");
@@ -157,7 +167,7 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
                 };
             }
 
-            pub fn next(self: *{{consumer.class_name}}, allocator: std.mem.Allocator, input: Executor.TaskResult) !Executor.TaskResult {
+            pub fn next(self: *{{consumer.class_name}}, allocator: std.mem.Allocator, input: TaskResult) !TaskResult {
                 if (input.is_last and input.chunk == null) {
                     const row_count = self.aggregator.count();
                     try Executor.GLOBAL_TRACER.startEvent("{{consumer.class_name}}-emit");
@@ -246,10 +256,10 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
 
     // ###### Writers
     //{%- if stage.writer.is_write_local_file %}
-    pub fn {{stage.writer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult, job: Job, schema: Schema, output_files: *std.ArrayList(OutputFile)) !void {
+    pub fn {{stage.writer.function_name}}(allocator: std.mem.Allocator, input: TaskResult, job: Job, schema: Schema, output_files: *std.ArrayList(OutputFile)) !void {
         const block = input.chunk orelse return;
         try Executor.GLOBAL_TRACER.startEvent("{{stage.writer.function_name}}");
-        var block_file = try Executor.BlockFile.init(allocator, schema,job.output_file);
+        var block_file = try BlockFile.init(allocator, schema,job.output_file);
         try block_file.appendData(allocator, block);
         try Executor.GLOBAL_TRACER.endEvent("{{stage.writer.function_name}}");
         const output_file_obj: OutputFile = .{ .file_path = job.output_file, .partition_id = 0 };
@@ -258,7 +268,7 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
     //{%- endif %}
 
     //{%- if stage.writer.is_write_shuffle %}
-    pub fn {{stage.writer.function_name}}(allocator: std.mem.Allocator, input: Executor.TaskResult, job: Job, schema: Schema, output_files: *std.ArrayList(OutputFile)) !void {
+    pub fn {{stage.writer.function_name}}(allocator: std.mem.Allocator, input: TaskResult, job: Job, schema: Schema, output_files: *std.ArrayList(OutputFile)) !void {
         const block = input.chunk orelse return;
         try Executor.GLOBAL_TRACER.startEvent("{{stage.writer.function_name}}");
         try Executor.GLOBAL_TRACER.startEvent("parition_per_row");
@@ -270,11 +280,11 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
         try Executor.GLOBAL_TRACER.endEvent("parition_per_row");
         //{% for name, column in stage.writer.output_schema %}
         try Executor.GLOBAL_TRACER.startEvent("fill_bucket {{name}}");
-        const col_{{loop.index0}}_buckets = try Executor.fill_buckets_{{column.zig_type}}(
+        const col_{{loop.index0}}_buckets = (try task_utils.fill_buckets(
             allocator,
             block.cols[{{loop.index0}}],
             bucket_sizes,
-            partition_per_row,);
+            partition_per_row,)).{{column.zig_type}};
         try Executor.GLOBAL_TRACER.endEvent("fill_bucket {{name}}");
         //{%- endfor %}
 
@@ -290,11 +300,11 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
                 //{%- endif %}
                 //{%- endfor %}
             });
-            const output_block = Executor.Block{.cols = column_data[0..]};
+            const output_block = Block{.cols = column_data[0..]};
             var buffer: [128]u8 = undefined;
             try Executor.GLOBAL_TRACER.startEvent("write partition");
             const output_file = try std.fmt.bufPrint(&buffer, "{s}_{d}", .{ job.output_file, i });
-            var block_file = try Executor.BlockFile.init(allocator, schema, output_file);
+            var block_file = try BlockFile.init(allocator, schema, output_file);
             try block_file.appendData(allocator, output_block);
             const output_file_obj: OutputFile = .{ .file_path = try allocator.dupe(u8, output_file), .partition_id = @intCast(i) };
             try output_files.append(allocator, output_file_obj);
@@ -312,16 +322,16 @@ pub fn {{ stage.function_name }}(allocator: std.mem.Allocator, job: Job) !void {
     try Executor.GLOBAL_TRACER.startEvent("stage_{{stage.id}}");
 
     //{%- if stage.producer.is_load_table_block %}
-    var producer = try Executor.LoadTableBlockProducer.init(allocator, job.input_file orelse @panic("input file not set"), job.input_block_id);
+    var producer = try LoadTableBlockProducer.init(allocator, job.input_file orelse @panic("input file not set"), job.input_block_id);
     //{%- elif stage.producer.is_load_shuffles %}
-    var producer = try Executor.LoadShuffleFilesProducer.init(allocator, job.shuffle_files orelse @panic("shuffle files not set"));
+    var producer = try LoadShuffleFilesProducer.init(allocator, job.shuffle_files orelse @panic("shuffle files not set"));
     //{%- elif stage.producer.is_join %}
     const left_schema = Schema{ .columns = (&[_]ColumnSchema{
         //{%- for col_name, col_type in stage.producer.left_schema %}
-        .{ .typ = Executor.TYPE_{{col_type.zig_type.upper()}}, .name = "{{col_name}}" },
+        .{ .typ = ColumnType.{{col_type.zig_type.upper()}}, .name = "{{col_name}}" },
         //{%- endfor %}
     })[0..] };
-    var producer = try Executor.JoinProducer({{stage.producer.left_key.zig_type}}).init(
+    var producer = try JoinProducer({{stage.producer.left_key.zig_type}}).init(
         allocator,
         job.shuffle_files orelse @panic("input file not set"),
         {{stage.producer.left_key.function_name}},
@@ -337,11 +347,11 @@ pub fn {{ stage.function_name }}(allocator: std.mem.Allocator, job: Job) !void {
     //{%- endfor %}
     const output_schema = Schema{.columns=(&[_]ColumnSchema{
         //{% for name, column in stage.writer.output_schema -%}
-        .{ .typ = Executor.TYPE_{{column.zig_type.upper()}}, .name = "{{name}}" },
+        .{ .typ = ColumnType.{{column.zig_type.upper()}}, .name = "{{name}}" },
         //{% endfor -%}
     })[0..]};
 
-    var last_output: Executor.TaskResult = .{.chunk= undefined, .is_last=false};
+    var last_output: TaskResult = .{.chunk= undefined, .is_last=false};
     var output_files = try std.ArrayList(OutputFile).initCapacity(allocator, PARTITIONS);
     while (true){
         const last_input_0 = try producer.next();

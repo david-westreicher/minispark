@@ -1,7 +1,8 @@
 const std = @import("std");
+
 const Executor = @import("executor");
-const Job = @import("executor").Job;
-const Tracer = @import("executor").Tracer;
+const Job = @import("executor").job.Job;
+const Tracer = @import("executor").utils.Tracer;
 const STAGES = @import("stage.zig").STAGES;
 
 const Arguments = struct {
