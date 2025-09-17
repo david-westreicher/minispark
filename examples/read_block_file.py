@@ -20,6 +20,5 @@ if __name__ == "__main__":
 
     block_file = BlockFile(args.file_path)
     print(f"Rows: {block_file.rows()}")  # noqa: T201
-    print(block_file.block_starts)  # noqa: T201
     rows = list(islice(block_file.read_data_rows(), 100))
     print(tabulate(rows, tablefmt="rounded_outline", headers="keys"))  # noqa: T201
