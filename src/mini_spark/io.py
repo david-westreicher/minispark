@@ -27,7 +27,7 @@ def to_unsigned_int(value: int, byte_count: int = 4) -> bytes:
 
 def read_unsigned_int(f: BinaryIO, byte_count: int = 4) -> int:
     if byte_count == LONG_BYTE_COUNT:
-        return int(struct.unpack("<Q", f.read(8))[0])
+        return int(struct.unpack("<Q", f.read(LONG_BYTE_COUNT))[0])
     return int.from_bytes(f.read(4), byteorder="little", signed=False)
 
 
@@ -104,7 +104,7 @@ def _generate_data_blocks_for_columns(  # noqa: C901
                     col_data.extend(val.encode("utf-8"))
             else:
                 raise ValueError(f"Unsupported column type {col_type}")
-            block_bytes.extend(to_unsigned_int(len(col_data), 8))
+            block_bytes.extend(to_unsigned_int(len(col_data), LONG_BYTE_COUNT))
             block_bytes.extend(col_data)
         yield bytes(block_bytes)
 
@@ -117,7 +117,7 @@ def _deserialize_block_column(  # noqa: C901, PLR0912
 ) -> Iterable[list[Any]]:
     # skip to correct column
     for schema_col_name, _ in schema:
-        column_data_size = read_unsigned_int(f, 8)
+        column_data_size = read_unsigned_int(f, LONG_BYTE_COUNT)
         if schema_col_name != column_name:
             f.seek(column_data_size, os.SEEK_CUR)
         else:
@@ -138,7 +138,7 @@ def _deserialize_block_column(  # noqa: C901, PLR0912
             rows_read += 1
     elif col_type == ColumnType.TIMESTAMP:
         while rows_read < block_rows:
-            int_value = struct.unpack("<q", f.read(8))[0]
+            int_value = struct.unpack("<q", f.read(LONG_BYTE_COUNT))[0]
             curr_chunk.append(timestamp_to_datetime(int_value))
             rows_read += 1
     elif col_type == ColumnType.STRING:
@@ -166,8 +166,8 @@ def _deserialize_block(f: BinaryIO, schema: Schema) -> Columns:
 def _deserialize_block_starts(f: BinaryIO) -> list[int]:
     f.seek(-4, os.SEEK_END)
     block_counts = read_unsigned_int(f)
-    f.seek(-8 * block_counts - 4, os.SEEK_CUR)
-    return [read_unsigned_int(f, 8) for _ in range(block_counts)]
+    f.seek(-LONG_BYTE_COUNT * block_counts - 4, os.SEEK_CUR)
+    return [read_unsigned_int(f, LONG_BYTE_COUNT) for _ in range(block_counts)]
 
 
 def merge_data_blocks(data_block_1: Columns, data_block_2: Columns) -> Columns:
@@ -224,7 +224,7 @@ class BlockFile:
                 block_starts.append(f.tell())
                 f.write(data_block)
             for block_start in block_starts:
-                f.write(to_unsigned_int(block_start, 8))
+                f.write(to_unsigned_int(block_start, LONG_BYTE_COUNT))
             f.write(to_unsigned_int(len(block_starts)))
         return self
 
@@ -241,12 +241,13 @@ class BlockFile:
                 data = merge_data_blocks(last_block, data)
                 f.seek(block_starts.pop(), os.SEEK_SET)
             else:
-                f.seek(-8 * (len(block_starts) + 1), os.SEEK_END)  # right after last block
+                # seek to right after last block
+                f.seek(-LONG_BYTE_COUNT * (len(block_starts) + 1), os.SEEK_END)
             for data_block in _generate_data_blocks_for_columns(schema, data):
                 block_starts.append(f.tell())
                 f.write(data_block)
             for block_size in block_starts:
-                f.write(to_unsigned_int(block_size, 8))
+                f.write(to_unsigned_int(block_size, LONG_BYTE_COUNT))
             f.write(to_unsigned_int(len(block_starts)))
         return self
 
