@@ -136,7 +136,7 @@ with PythonExecutionEngine() as engine:
 You can switch between engines by configuration when creating a session.  
 
 ## 🏃 Benchmark
-To test the implementation we use the [TCP-H](https://www.tpc.org/tpch/) benchmark. We show the execution times for different scaling factors and the following query
+To test the implementation we use the [TCP-H](https://www.tpc.org/tpch/) benchmark. We run the benchmark with 4 worker threads. Here are the execution times for different scaling factors and the following query
 
 ```sql
 SELECT
