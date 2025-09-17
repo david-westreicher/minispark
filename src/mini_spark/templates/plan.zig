@@ -280,11 +280,11 @@ pub fn {{col.function_name}}(allocator: std.mem.Allocator, block: Block, rows: u
         try Executor.GLOBAL_TRACER.endEvent("parition_per_row");
         //{% for name, column in stage.writer.output_schema %}
         try Executor.GLOBAL_TRACER.startEvent("fill_bucket {{name}}");
-        const col_{{loop.index0}}_buckets = try task_utils.fill_buckets_{{column.zig_type}}(
+        const col_{{loop.index0}}_buckets = (try task_utils.fill_buckets(
             allocator,
             block.cols[{{loop.index0}}],
             bucket_sizes,
-            partition_per_row,);
+            partition_per_row,)).{{column.zig_type}};
         try Executor.GLOBAL_TRACER.endEvent("fill_bucket {{name}}");
         //{%- endfor %}
 
