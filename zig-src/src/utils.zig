@@ -1,5 +1,9 @@
 const std = @import("std");
 
+const ColumnType = @import("block_file.zig").ColumnType;
+const ColumnData = @import("block_file.zig").ColumnData;
+const ROWS_PER_BLOCK = @import("block_file.zig").ROWS_PER_BLOCK;
+
 pub const TraceEvent = struct {
     name: []const u8,
     time: u64,
@@ -61,6 +65,24 @@ pub const AnyList = union(enum) {
     Int64List: std.ArrayList(i64),
     FloatList: std.ArrayList(f32),
     StrList: std.ArrayList([]const u8),
+
+    pub fn init(allocator: std.mem.Allocator, column_type: ColumnType) !AnyList {
+        return switch (column_type) {
+            .I32 => AnyList{ .IntList = try std.ArrayList(i32).initCapacity(allocator, ROWS_PER_BLOCK) },
+            .I64 => AnyList{ .Int64List = try std.ArrayList(i64).initCapacity(allocator, ROWS_PER_BLOCK) },
+            .F32 => AnyList{ .FloatList = try std.ArrayList(f32).initCapacity(allocator, ROWS_PER_BLOCK) },
+            .STR => AnyList{ .StrList = try std.ArrayList([]const u8).initCapacity(allocator, ROWS_PER_BLOCK) },
+        };
+    }
+
+    pub fn append_column_data(self: *AnyList, allocator: std.mem.Allocator, column: ColumnData) !void {
+        switch (self.*) {
+            .IntList => |*list| try list.appendSlice(allocator, column.I32),
+            .Int64List => |*list| try list.appendSlice(allocator, column.I64),
+            .FloatList => |*list| try list.appendSlice(allocator, column.F32),
+            .StrList => |*list| try list.appendSlice(allocator, column.Str.slices),
+        }
+    }
 
     pub fn deinit(self: *AnyList, allocator: std.mem.Allocator) void {
         switch (self.*) {

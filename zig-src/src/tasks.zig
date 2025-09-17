@@ -77,17 +77,7 @@ pub fn JoinProducer(comptime K: type) type {
                 const left_columns = try self.allocator.alloc(AnyList, self.left_schema.columns.len);
                 var load_left = try LoadShuffleFilesProducer.init(self.allocator, self.left_shuffle_files);
                 for (left_columns, self.left_schema.columns) |*col, schema_col| {
-                    if (schema_col.typ == ColumnType.I32) {
-                        col.* = AnyList{ .IntList = try std.ArrayList(i32).initCapacity(self.allocator, ROWS_PER_BLOCK) };
-                    } else if (schema_col.typ == ColumnType.I64) {
-                        col.* = AnyList{ .Int64List = try std.ArrayList(i64).initCapacity(self.allocator, ROWS_PER_BLOCK) };
-                    } else if (schema_col.typ == ColumnType.F32) {
-                        col.* = AnyList{ .FloatList = try std.ArrayList(f32).initCapacity(self.allocator, ROWS_PER_BLOCK) };
-                    } else if (schema_col.typ == ColumnType.STR) {
-                        col.* = AnyList{ .StrList = try std.ArrayList([]const u8).initCapacity(self.allocator, ROWS_PER_BLOCK) };
-                    } else {
-                        return Error.UnknownType;
-                    }
+                    col.* = try AnyList.init(self.allocator, schema_col.typ);
                 }
                 while (true) {
                     const last_output = try load_left.next();
@@ -107,40 +97,7 @@ pub fn JoinProducer(comptime K: type) type {
                         try entry.value_ptr.append(self.allocator, @intCast(row_idx));
                     }
                     for (chunk.cols, 0..) |col_data, col_idx| {
-                        switch (left_columns[col_idx]) {
-                            .IntList => |*list| {
-                                switch (col_data) {
-                                    .I32 => |vals| {
-                                        try list.appendSlice(self.allocator, vals);
-                                    },
-                                    else => return Error.UnknownType,
-                                }
-                            },
-                            .Int64List => |*list| {
-                                switch (col_data) {
-                                    .I64 => |vals| {
-                                        try list.appendSlice(self.allocator, vals);
-                                    },
-                                    else => return Error.UnknownType,
-                                }
-                            },
-                            .FloatList => |*list| {
-                                switch (col_data) {
-                                    .F32 => |vals| {
-                                        try list.appendSlice(self.allocator, vals);
-                                    },
-                                    else => return Error.UnknownType,
-                                }
-                            },
-                            .StrList => |*list| {
-                                switch (col_data) {
-                                    .Str => |vals| {
-                                        try list.appendSlice(self.allocator, vals.slices);
-                                    },
-                                    else => return Error.UnknownType,
-                                }
-                            },
-                        }
+                        try left_columns[col_idx].append_column_data(self.allocator, col_data);
                     }
                 }
                 self.left_columns = left_columns;
@@ -164,61 +121,40 @@ pub fn JoinProducer(comptime K: type) type {
             const output_columns = try self.allocator.alloc(AnyList, self.left_schema.columns.len + chunk.cols.len);
             defer self.allocator.free(output_columns);
             for (self.left_schema.columns, 0..) |schema_col, idx| {
-                if (schema_col.typ == ColumnType.I32) {
-                    output_columns[idx] = AnyList{ .IntList = try std.ArrayList(i32).initCapacity(self.allocator, chunk.rows()) };
-                } else if (schema_col.typ == ColumnType.I64) {
-                    output_columns[idx] = AnyList{ .Int64List = try std.ArrayList(i64).initCapacity(self.allocator, chunk.rows()) };
-                } else if (schema_col.typ == ColumnType.F32) {
-                    output_columns[idx] = AnyList{ .FloatList = try std.ArrayList(f32).initCapacity(self.allocator, chunk.rows()) };
-                } else if (schema_col.typ == ColumnType.STR) {
-                    output_columns[idx] = AnyList{ .StrList = try std.ArrayList([]const u8).initCapacity(self.allocator, chunk.rows()) };
-                } else {
-                    return Error.UnknownType;
-                }
+                output_columns[idx] = try AnyList.init(self.allocator, schema_col.typ);
             }
             for (chunk.cols, self.left_schema.columns.len..) |chunk_col, idx| {
-                switch (chunk_col) {
-                    .I32 => |vals| {
-                        output_columns[idx] = AnyList{ .IntList = try std.ArrayList(i32).initCapacity(self.allocator, vals.len) };
-                    },
-                    .I64 => |vals| {
-                        output_columns[idx] = AnyList{ .Int64List = try std.ArrayList(i64).initCapacity(self.allocator, vals.len) };
-                    },
-                    .F32 => |vals| {
-                        output_columns[idx] = AnyList{ .FloatList = try std.ArrayList(f32).initCapacity(self.allocator, vals.len) };
-                    },
-                    .Str => |vals| {
-                        output_columns[idx] = AnyList{ .StrList = try std.ArrayList([]const u8).initCapacity(self.allocator, vals.slices.len) };
-                    },
-                }
+                const column_type = switch (chunk_col) {
+                    .I32 => ColumnType.I32,
+                    .I64 => ColumnType.I64,
+                    .F32 => ColumnType.F32,
+                    .Str => ColumnType.STR,
+                };
+                output_columns[idx] = try AnyList.init(self.allocator, column_type);
             }
 
             for (key_column, 0..) |key, right_row_idx| {
                 const left_rows_idx = self.left_row_map.get(key) orelse continue;
-                for (left_columns, 0..) |left_col, output_col_idx| {
+                for (left_columns, output_columns) |left_col, *output_col| {
                     switch (left_col) {
                         .IntList => |left_rows| {
                             for (left_rows_idx.items) |left_row_idx| {
-                                var output_col = &output_columns[output_col_idx].IntList;
-                                try output_col.append(self.allocator, left_rows.items[left_row_idx]);
+                                try output_col.IntList.append(self.allocator, left_rows.items[left_row_idx]);
                             }
                         },
                         .Int64List => |left_rows| {
                             for (left_rows_idx.items) |left_row_idx| {
-                                var output_col = &output_columns[output_col_idx].Int64List;
-                                try output_col.append(self.allocator, left_rows.items[left_row_idx]);
+                                try output_col.Int64List.append(self.allocator, left_rows.items[left_row_idx]);
                             }
                         },
                         .FloatList => |left_rows| {
                             for (left_rows_idx.items) |left_row_idx| {
-                                var output_col = &output_columns[output_col_idx].FloatList;
-                                try output_col.append(self.allocator, left_rows.items[left_row_idx]);
+                                try output_col.FloatList.append(self.allocator, left_rows.items[left_row_idx]);
                             }
                         },
                         .StrList => |left_rows| {
                             for (left_rows_idx.items) |left_row_idx| {
-                                var output_col = &output_columns[output_col_idx].StrList;
-                                try output_col.append(self.allocator, left_rows.items[left_row_idx]);
+                                try output_col.StrList.append(self.allocator, left_rows.items[left_row_idx]);
                             }
                         },
                     }
@@ -335,7 +271,7 @@ pub const LoadShuffleFilesProducer = struct {
     }
 };
 
-test "write -> append -> read block" {
+test "join producer" {
     const Tracer = @import("utils.zig").Tracer;
     const ColumnSchema = @import("block_file.zig").ColumnSchema;
     var tmp = std.testing.tmpDir(.{}); // options: .{ .keep = true } if you want to inspect files
