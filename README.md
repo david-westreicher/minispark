@@ -2,6 +2,9 @@
 A **minimal Spark-like query engine** built for learning and experimentation.  
 MiniSpark supports both SQL and a DataFrame API, with multiple execution backends — from a pure Python interpreter to a compiled Zig engine.
 
+![Shell Demo](docs/shell.gif)
+
+
 ## ✨ Features  
 
 - **SQL support**:  
@@ -55,7 +58,7 @@ Example session output shows query results in a simple table format.
 
 ### Using the DataFrame API  
 
-MiniSpark supports [DataFrame](https://en.wikipedia.org/wiki/Apache_Spark#Spark_SQL) operations like filtering, grouping, counting, and applying conditions, similar to [PySpark](https://spark.apache.org/docs/latest/api/python/index.html). You can chain multiple transformations and display the results.  
+MiniSpark supports [DataFrame](https://en.wikipedia.org/wiki/Apache_Spark#Spark_SQL) operations like filtering, grouping, counting, and applying conditions, similar to [PySpark](https://spark.apache.org/docs/latest/api/python/index.html). You can chain multiple transformations and display/collect the results. Check [the examples folder](examples/) for more example queries and scripts.
 
 ```python
 from pathlib import Path
@@ -114,7 +117,7 @@ SELECT
     fruit,
     SUM(quantity * price) AS total_price
 FROM
-    some_database_file.bin
+    'some_database_file.bin'
 GROUP BY
     fruit;
 """
