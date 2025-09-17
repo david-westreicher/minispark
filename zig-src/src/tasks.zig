@@ -135,7 +135,7 @@ pub fn JoinProducer(comptime K: type) type {
 
             for (key_column, 0..) |key, right_row_idx| {
                 const left_rows_idx = self.left_row_map.get(key) orelse continue;
-                for (left_columns, output_columns) |left_col, *output_col| {
+                for (left_columns, output_columns[0..left_columns.len]) |left_col, *output_col| {
                     switch (left_col) {
                         .IntList => |left_rows| {
                             for (left_rows_idx.items) |left_row_idx| {
