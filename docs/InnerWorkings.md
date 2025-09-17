@@ -194,9 +194,9 @@ Each stage is a *chunk* pipeline, starting with a *Producer*, leading to *Consum
 
 We try to chunk the data so that we don't run out of memory. The `AggregateTask` / `JoinTask` however, need to keep an in-memory hash map of the full partition it processes (left-partition for the JoinTask).
 
-**Example of the Execution of Stage 2**
+### Example of the Execution of Stage 2
 
-### Join produces the following table
+#### Join produces the following table
 ```bash
 ╭─────────────┬────────────────┬───────────────┬─────────┬─────────────┬──────────────┬─────────────┬─────────────┬──────────────┬───────────┬─────────────────────╮
 │   u.user_id │ u.first_name   │ u.last_name   │   u.age │ u.country   │   o.order_id │   o.user_id │ o.product   │   o.quantity │   o.price │ o.order_date        │
@@ -218,7 +218,7 @@ We try to chunk the data so that we don't run out of memory. The `AggregateTask`
 │          14 │ Nick           │ Thompson      │      23 │ UK          │           15 │          14 │ Keyboard    │            1 │        42 │ 2025-08-01 00:00:00 │
 ╰─────────────┴────────────────┴───────────────┴─────────┴─────────────┴──────────────┴─────────────┴─────────────┴──────────────┴───────────┴─────────────────────╯
 ```
-### The Aggregate task groups by country and computes the aggregations
+#### The Aggregate task groups by country and computes the aggregations
 ```bash
 ╭─────────────┬────────────────┬───────────────┬──────────────────────────────────────╮
 │ u.country   │   orders_count │   total_sales │   _having_sum_o.quantity_mul_o.price │
@@ -228,7 +228,7 @@ We try to chunk the data so that we don't run out of memory. The `AggregateTask`
 │ USA         │              7 │          4535 │                                 4535 │
 ╰─────────────┴────────────────┴───────────────┴──────────────────────────────────────╯
 ```
-### The filter task filters out countries with total sales <= 500
+#### The filter task filters out countries with total sales <= 500
 ```bash
 ╭─────────────┬────────────────┬───────────────┬──────────────────────────────────────╮
 │ u.country   │   orders_count │   total_sales │   _having_sum_o.quantity_mul_o.price │
@@ -237,7 +237,7 @@ We try to chunk the data so that we don't run out of memory. The `AggregateTask`
 │ USA         │              7 │          4535 │                                 4535 │
 ╰─────────────┴────────────────┴───────────────┴──────────────────────────────────────╯
 ```
-### The project task renames the columns
+#### The project task renames the columns leading to the final output
 ```bash
 ╭─────────────┬────────────────┬───────────────╮
 │ u.country   │   orders_count │   total_sales │
