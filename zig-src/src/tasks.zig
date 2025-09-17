@@ -291,7 +291,7 @@ test "join producer" {
     var block_data = [_]ColumnData{ col1, col2 };
     const block = Block{ .cols = block_data[0..] };
 
-    var write_block_file = try BlockFile.init(allocator, schema, "tmp/test3.bin");
+    var write_block_file = try BlockFile.init(allocator, schema, "/tmp/test3.bin");
     defer write_block_file.deinit();
     try write_block_file.writeData(block);
 
