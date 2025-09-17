@@ -216,7 +216,7 @@ Notice that the translation from SQL to the *DataFrame* is not straightforward:
 
 This dataframe is now converted into a logical plan
 
-```txt
+```python
  Project(u.country, orders_count, total_sales):None
   +-  Filter((_having_sum_o.quantity_mul_o.price) > (500)):None
     +-  AggregateTask(group_by: u.country, agg: [
