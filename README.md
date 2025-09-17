@@ -2,8 +2,6 @@
 A **minimal Spark-like query engine** built for learning and experimentation.  
 MiniSpark supports both SQL and a DataFrame API, with multiple execution backends — from a pure Python interpreter to a compiled Zig engine.  
 
----
-
 ## ✨ Features  
 
 - **SQL support**:  
@@ -20,14 +18,10 @@ MiniSpark supports both SQL and a DataFrame API, with multiple execution backend
   - ⚡ **ThreadPoolEngine**: compiles queries to Zig and executes natively  
 - **Shuffle stages** for distributed-style `GROUP BY` and `JOIN`  
 
----
-
 ## 📦 Dependencies  
 
 - **Python** 3.13  
 - **Zig** 0.15.1  
-
----
 
 ## 🔧 Installation  
 
@@ -45,8 +39,6 @@ Run the test suite to ensure MiniSpark is working correctly.
 pytest
 ```
 
----
-
 ## 💻 Interactive Shell  
 ```bash
 python -m mini_spark.shell
@@ -57,8 +49,6 @@ MiniSpark comes with a lightweight interactive shell.
 - Lets you **execute SQL queries** and see results immediately  
 
 Example session output shows query results in a simple table format.  
-
----
 
 ## 🔍 Example Usage  
 
@@ -110,16 +100,12 @@ with PythonExecutionEngine() as engine:
     )
 ```
 
----
-
 ## ⚡ Execution Engines  
 
 - **PythonEngine** (default) executes queries directly in Python and is easier to debug, though slower.  
 - **ThreadEngine** compiles queries to Zig code and runs them across multiple threads for faster execution.  
 
 You can switch between engines by configuration when creating a session.  
-
----
 
 ## 📚 Why MiniSpark?  
 
