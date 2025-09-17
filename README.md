@@ -173,7 +173,7 @@ This section explains what happens inside **minispark** when you run a query —
 ╰────────────┴───────────┴───────────┴────────────┴─────────┴─────────────────────╯
 ```
 
-Example query (SQL):
+#### Query:
 ```sql
 SELECT u.country, COUNT() AS orders_count, SUM(o.quantity*o.price) AS total_sales
 FROM 'users' AS u
@@ -181,6 +181,68 @@ FROM 'users' AS u
 GROUP BY u.country
 HAVING SUM(o.quantity*o.price) > 500;
 ```
+
+### 2) Parsing (PEG — Parsimonious)
+
+- The SQL text is passed to a **PEG parser** implemented with [Parsimonious](https://github.com/erikrose/parsimonious).  
+- The result of this parsing step is a *DataFrame* object that represents the query in a structured way.
+
+```python
+df = (
+    DataFrame()
+    .table('users').alias('u')
+    .join(
+        DataFrame().table('orders').alias('o'),
+        on=Col('u.user_id') == Col('o.user_id'),
+        how="inner"
+    )
+    .group_by(Col('u.country'))
+    .agg(
+        F.count().alias('orders_count'),
+        F.sum(Col('o.quantity') * Col('o.price')).alias('total_sales')
+    )
+    .filter(F.col("total_sales") > 500)
+    .select(Col("u.country"), Col("orders_count"), Col("total_sales"))
+)
+```
+
+Notice that the translation from SQL to the *DataFrame* is not straightforward:
+
+- Selections are done in the end
+- `HAVING` conditions are done after the aggregation
+- `COUNT` and `SUM` appear in the select statement but need to be computed during aggregation
+
+### 3) Logical Plan
+
+This dataframe is now converted into a logical plan
+
+```txt
+ Project(u.country, orders_count, total_sales):None
+  +-  Filter((_having_sum_o.quantity_mul_o.price) > (500)):None
+    +-  AggregateTask(group_by: u.country, agg: [
+            AggCol(original_col=Lit(value=1), name='orders_count', type='sum'),
+            AggCol(original_col=BinaryOperatorColumn(left_side=o.quantity, right_side=o.price, operator=<built-in function mul>, left_type_convert_to=None, right_type_convert_to=None), name='total_sales', type='sum'),
+            AggCol(original_col=BinaryOperatorColumn(left_side=o.quantity, right_side=o.price, operator=<built-in function mul>, left_type_convert_to=None, right_type_convert_to=None), name='_having_sum_o.quantity_mul_o.price', type='sum')
+        ]):None
+      +-  JoinTask((u.user_id) == (o.user_id), "inner"):None
+        +-  LoadTableBlockTask(users):None
+        +-  LoadTableBlockTask(orders):None
+```
+
+This format is similar to what you would find in other query engines like Spark or DuckDB.
+You read it from the bottom up, indentations indicate data flow, the `:none` at the end will be explained soon.
+
+- 2 `LoadTableBlock` tasks read the `users` and `orders` tables
+- The `JoinTask` combines them into a new intermediate table
+- The `AggregateTask` groups by country and computes the aggregations
+  - Notice that there are 3 aggregations
+  - The last one is an internal one used to compute the `HAVING` condition
+  - Each aggregation stores the computation needed to compute it
+    - `orders_count` is a `sum` over the literal `1` -> this computes the count
+    - `total_sales` is a `sum` over the expression (`BinaryOperatorColumn`) `o.quantity * o.price`
+- The `Filter` task applies the `HAVING` condition
+- The `Project` task selects the final columns to return
+
 
 ## 📚 Why **minispark**?
 
