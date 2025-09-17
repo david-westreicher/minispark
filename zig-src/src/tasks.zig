@@ -134,6 +134,7 @@ pub fn JoinProducer(comptime K: type) type {
             }
 
             for (key_column, 0..) |key, right_row_idx| {
+                // fill left rows
                 const left_rows_idx = self.left_row_map.get(key) orelse continue;
                 for (left_columns, output_columns[0..left_columns.len]) |left_col, *output_col| {
                     switch (left_col) {
@@ -159,6 +160,7 @@ pub fn JoinProducer(comptime K: type) type {
                         },
                     }
                 }
+                // fill right rows
                 for (chunk.cols, self.left_schema.columns.len..) |right_col, output_col_idx| {
                     switch (right_col) {
                         .I32 => |vals| {
@@ -186,25 +188,7 @@ pub fn JoinProducer(comptime K: type) type {
             }
             const joined_columns = try self.allocator.alloc(ColumnData, self.left_schema.columns.len + chunk.cols.len);
             for (joined_columns, output_columns) |*col, output_col| {
-                switch (output_col) {
-                    .IntList => |list| {
-                        var mutable_list = list;
-                        col.* = ColumnData{ .I32 = try mutable_list.toOwnedSlice(self.allocator) };
-                    },
-                    .Int64List => |list| {
-                        var mutable_list = list;
-                        col.* = ColumnData{ .I64 = try mutable_list.toOwnedSlice(self.allocator) };
-                    },
-                    .FloatList => |list| {
-                        var mutable_list = list;
-                        col.* = ColumnData{ .F32 = try mutable_list.toOwnedSlice(self.allocator) };
-                    },
-                    .StrList => |list| {
-                        col.* = ColumnData{ .Str = try StringColumn.init(self.allocator, list.items) };
-                        var mutable_list = list;
-                        mutable_list.deinit(self.allocator);
-                    },
-                }
+                col.* = try output_col.to_owned_column_data(self.allocator);
             }
             return .{ .chunk = Block{ .cols = joined_columns }, .is_last = false };
         }

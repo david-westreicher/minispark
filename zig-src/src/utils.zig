@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ColumnType = @import("block_file.zig").ColumnType;
 const ColumnData = @import("block_file.zig").ColumnData;
+const StringColumn = @import("block_file.zig").StringColumn;
 const ROWS_PER_BLOCK = @import("block_file.zig").ROWS_PER_BLOCK;
 
 pub const TraceEvent = struct {
@@ -82,6 +83,29 @@ pub const AnyList = union(enum) {
             .FloatList => |*list| try list.appendSlice(allocator, column.F32),
             .StrList => |*list| try list.appendSlice(allocator, column.Str.slices),
         }
+    }
+
+    pub fn to_owned_column_data(self: AnyList, allocator: std.mem.Allocator) !ColumnData {
+        return switch (self) {
+            .IntList => |list| {
+                var mutable_list = list;
+                return ColumnData{ .I32 = try mutable_list.toOwnedSlice(allocator) };
+            },
+            .Int64List => |list| {
+                var mutable_list = list;
+                return ColumnData{ .I64 = try mutable_list.toOwnedSlice(allocator) };
+            },
+            .FloatList => |list| {
+                var mutable_list = list;
+                return ColumnData{ .F32 = try mutable_list.toOwnedSlice(allocator) };
+            },
+            .StrList => |list| {
+                const column = ColumnData{ .Str = try StringColumn.init(allocator, list.items) };
+                var mutable_list = list;
+                mutable_list.deinit(allocator);
+                return column;
+            },
+        };
     }
 
     pub fn deinit(self: *AnyList, allocator: std.mem.Allocator) void {
