@@ -1,6 +1,8 @@
 # ⚡ minispark ⚡
 A **minimal Spark-like query engine** built for learning and experimentation.  
-**minispark** supports both SQL and a DataFrame API, with multiple execution backends — from a pure Python interpreter to a compiled Zig engine.
+**minispark** supports both SQL and a DataFrame API, with multiple execution backends — from a pure Python engine to a compiled native execution engine (that should be super fast 🚀, powered by [Zig](https://ziglang.org)).
+
+Checkout the [Inner Workings](#-inner-workings) section to see how it works under the hood!
 
 ![Shell Demo](docs/shell.gif)
 
@@ -295,11 +297,11 @@ This plan now also contains schema information from the source tables and their 
     - Choose a partition `i` based on the job (will be explained later)
     - Load the shuffled data from the left side (read full `left.partition_i`)
     - Load the shuffled data from the right side (read block by block from `right.partition_i`)
-    - perform the `JOIN` (using a hash join, with chunked data from the right side and emit the joined chunk)
-    - for each chunk do a local aggregation by `country` and write results to shuffle partitions `worker_j_agg_i` based on `country` (the group by key)
+    - Perform the `JOIN` (using a hash join)
+    - Do a local aggregation by `country` and write results to shuffle partitions `worker_j_agg_i` based on `country` (the group by key)
 - **Stage 3**:
     - Choose a partition `i` based on the job (will be explained later)
-    - Read shuffle files from all workers `worker_x_agg_i` (chunk by chunk)
+    - Read shuffle files from all workers `worker_x_agg_i`
     - Aggregate the data by `country` (final aggregation)
     - Filter results based on the `HAVING` condition
     - Project the final columns (notice that we remove the table alias names)
@@ -321,13 +323,13 @@ In our example the following jobs would be run:
 
 The execution engine takes care of running the jobs. Depending on the engine, jobs can be run sequentially (PythonEngine) or in parallel (ThreadPoolEngine).
 The *driver* coordinates the job creation (per stage), execution of the stages and collection of results.
-Each stage is a *block* pipeline, starting with a *Producer*, leading to *Consumers* and ending with a *Writer*.
+Each stage is a *chunk* pipeline, starting with a *Producer*, leading to *Consumers* and ending with a *Writer*.
 
 - Producer: `JoinTask`, `LoadTableBlockTask`, `LoadShuffleFile`
 - Consumers: `AggregateTask`, `Filter`, `Project`
 - Writer: `WriteToShufflePartitions`, `WriteToLocalFileTask`
 
-We try to chunk the data so that we don't run out of memory. The `AggregateTask` / `JoinTask` however, need to keeps an in-memory hash map of the full partition it processes (left-partition for the JoinTask).
+We try to chunk the data so that we don't run out of memory. The `AggregateTask` / `JoinTask` however, need to keep an in-memory hash map of the full partition it processes (left-partition for the JoinTask).
 
 **Example of the Execution of Stage 2**
 
@@ -381,6 +383,13 @@ We try to chunk the data so that we don't run out of memory. The `AggregateTask`
 │ USA         │              7 │          4535 │
 ╰─────────────┴────────────────┴───────────────╯
 ```
+
+
+#### Code Generation
+
+To speed up execution, the `ThreadPoolEngine` compiles the full plan to Zig code (via templating).
+This code is then compiled once and executed on a thread pool natively, leading to significant speedups.
+The communication between the Python threads and the native threads is done via files (shuffle files, output files) and `stdin`/`stdout` for jobs.
 
 ## 📚 Why **minispark**?
 
