@@ -303,7 +303,7 @@ test "join producer" {
         }
     }.inner;
 
-    var left_shuffle_files = [_][]const u8{"tmp/test3.bin"};
+    var left_shuffle_files = [_][]const u8{"/tmp/test3.bin"};
     var join_producer = try JoinProducer([]const u8).init(
         allocator,
         left_shuffle_files[0..],

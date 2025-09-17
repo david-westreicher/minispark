@@ -519,11 +519,11 @@ test "write -> read block" {
     var block_data = [_]ColumnData{ col1, col2, col3 };
     const block = Block{ .cols = block_data[0..] };
 
-    var write_block_file = try BlockFile.init(allocator, schema, "tmp/test.bin");
+    var write_block_file = try BlockFile.init(allocator, schema, "/tmp/test.bin");
     defer write_block_file.deinit();
     try write_block_file.writeData(block);
 
-    var read_block_file = try BlockFile.initFromFile(allocator, "tmp/test.bin");
+    var read_block_file = try BlockFile.initFromFile(allocator, "/tmp/test.bin");
     defer read_block_file.deinit();
     var read_block_data = try read_block_file.readBlock(0);
     defer read_block_data.deinit(allocator);
@@ -547,12 +547,12 @@ test "write -> append -> read block" {
     var block_data = [_]ColumnData{ col1, col2 };
     const block = Block{ .cols = block_data[0..] };
 
-    var write_block_file = try BlockFile.init(allocator, schema, "tmp/test2.bin");
+    var write_block_file = try BlockFile.init(allocator, schema, "/tmp/test2.bin");
     defer write_block_file.deinit();
     try write_block_file.writeData(block);
     try write_block_file.appendData(allocator, block);
 
-    var read_block_file = try BlockFile.initFromFile(allocator, "tmp/test2.bin");
+    var read_block_file = try BlockFile.initFromFile(allocator, "/tmp/test2.bin");
     defer read_block_file.deinit();
     var read_block_data = try read_block_file.readBlock(0);
     defer read_block_data.deinit(allocator);
